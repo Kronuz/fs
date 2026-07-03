@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-#include <sys/stat.h>
 #include <unistd.h>
 
 static int failures = 0;
@@ -32,7 +31,14 @@ static void test_normalize_path() {
 
 
 static void test_dir_roundtrip() {
-	std::string base = "/tmp/fs_test_" + std::to_string(::getpid());
+	char tmpl[] = "fs_test.XXXXXX";
+	char* d = ::mkdtemp(tmpl);
+	CHECK(d != nullptr);
+	if (d == nullptr) {
+		return;
+	}
+
+	std::string base = d;
 	std::string nested = base + "/x/y/z";
 
 	// mkdirs creates the whole chain; exists observes it; a second mkdirs is idempotent.

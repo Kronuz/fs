@@ -39,7 +39,7 @@ into real logging via `FS_TRACE_HEADER`.
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
-ctest --test-dir build        # normalize_path + a real mkdirs/delete/exists round-trip
+ctest --test-dir build        # unit test + self-checking Xapiand-style db layout example
 ```
 
 ## Use (FetchContent)

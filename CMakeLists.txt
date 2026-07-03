@@ -44,4 +44,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	add_executable(fs_test test/test.cc)
 	target_link_libraries(fs_test PRIVATE fs)
 	add_test(NAME fs COMMAND fs_test)
+
+	# A realistic usage example that mirrors Xapiand's database directory layout:
+	# normalize a data path, create the .xapiand tree, receive files into a
+	# mkdtemp switch dir, move them into place, quarantine WAL files, and delete
+	# shard file globs. It self-checks and is also registered as a ctest test.
+	add_executable(fs_db_layout examples/db_layout.cc)
+	target_link_libraries(fs_db_layout PRIVATE fs)
+	add_test(NAME fs_db_layout COMMAND fs_db_layout)
 endif()
