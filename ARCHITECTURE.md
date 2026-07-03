@@ -4,6 +4,11 @@
 The value is in the recursion, glob matching, and path-string normalization; the raw
 byte I/O is delegated to the `io` library.
 
+![fs: filesystem helpers delegating byte I/O to io, path work to string libs](assets/architecture.svg)
+
+<!-- Diagram: assets/architecture.svg. Edit the D2 source below and re-render with:
+     d2 --theme 0 --pad 20 <this-source>.d2 assets/architecture.svg
+
 ```d2
 # fs: filesystem helpers delegating byte I/O to io, path work to string libs.
 direction: down
@@ -17,6 +22,7 @@ seam: "FS_TRACE_HEADER\n(L_* logging + error:: / repr; no-op default)" { style.f
 api -> deps.io; api -> deps.split; api -> deps.strings; api -> deps.stringified
 api -> seam: "diagnostics" { style.stroke-dash: 3 }
 ```
+-->
 
 ## Dependencies
 
