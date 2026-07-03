@@ -4,6 +4,29 @@
 The value is in the recursion, glob matching, and path-string normalization; the raw
 byte I/O is delegated to the `io` library.
 
+```d2
+# fs: filesystem helpers delegating byte I/O to io, path work to string libs.
+direction: down
+api: "fs API\n(mkdirs, delete_files, copy_file, normalize_path, ...)" { style.fill: "#e8f5ee" }
+deps: "dependencies" {
+  style.fill: "#eef2f7"
+  grid-columns: 4
+  io: "io\n(EINTR-safe file ops)"; split: "split\n(path by '/')"; strings: "strings\n(prefix/suffix)"; stringified: "stringified\n(NUL-terminate)"
+}
+seam: "FS_TRACE_HEADER\n(L_* logging + error:: / repr; no-op default)" { style.fill: "#faf3e6" }
+api -> deps.io; api -> deps.split; api -> deps.strings; api -> deps.stringified
+api -> seam: "diagnostics" { style.stroke-dash: 3 }
+```
+
+## Dependencies
+
+Kronuz libraries, fetched at tip: **`io`** (EINTR-safe `open`/`close`/`read`/`write`/
+`mkdtemp`), **`split`** (`Split<>` to walk a path by `/`), **`strings`**
+(`startswith`/`endswith`), **`stringified`** (`string_view` → NUL-terminated). Logging
+is **not** a dependency: the `L_*` family is no-op by default and its `error::`/`repr`
+arguments are dropped unevaluated, so those enter only when a host opts in via
+`FS_TRACE_HEADER`.
+
 ## Files
 
 ```
