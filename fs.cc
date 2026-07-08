@@ -23,6 +23,7 @@
 #include "fs.hh"
 
 #include <algorithm>                // for std::any_of
+#include <cstring>                  // for strncpy
 #include <errno.h>                  // for errno
 #include <fnmatch.h>                // for fnmatch
 #include <limits.h>                 // for PATH_MAX
