@@ -1,5 +1,7 @@
 # fs
 
+[![CI](https://github.com/Kronuz/fs/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/fs/actions/workflows/ci.yml)
+
 Filesystem helpers extracted from [Xapiand](https://github.com/Kronuz/Xapiand):
 recursive `mkdirs`, existence checks, glob-based delete/quarantine, directory
 copy/move, and a pure-string path normalizer.
