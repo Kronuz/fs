@@ -1,22 +1,60 @@
 # fs
 
 [![CI](https://github.com/Kronuz/fs/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/fs/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
-Filesystem helpers extracted from [Xapiand](https://github.com/Kronuz/Xapiand):
-recursive `mkdirs`, existence checks, glob-based delete/quarantine, directory
-copy/move, and a pure-string path normalizer.
+The filesystem chores a database server needs, in C++20: create a directory chain,
+delete or quarantine files by glob, copy or move a tree, and normalize a path without
+touching the disk.
+
+![fs: helpers over io, strings, split, and stringified](assets/architecture.svg)
+
+## ✨ Highlights
+
+- 📁 **`mkdirs`**: the whole chain in one call.
+- 🧹 **`delete_files`** by glob, removing the directory when it ends up empty.
+- 🚧 **`quarantine_files`**: rename suspect files aside instead of deleting them.
+- 📋 **`copy_file` and `move_files`** for directory trees.
+- ✂️ **`normalize_path`**: collapses `.`, `..`, and repeated `/` as a pure string
+  operation.
+- 🛡️ **EINTR-safe** through [io](https://github.com/Kronuz/io); logging is an optional
+  seam (`FS_TRACE_HEADER`).
+
+## 📦 Installation
+
+Requires a C++20 compiler, a POSIX system, and CMake 3.14 or newer. It brings
+[io](https://github.com/Kronuz/io), [strings](https://github.com/Kronuz/strings),
+[split](https://github.com/Kronuz/split), and
+[stringified](https://github.com/Kronuz/stringified). CI builds it on Linux (x86_64,
+arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan, UBSan, and TSan builds.
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(fs
+  GIT_REPOSITORY https://github.com/Kronuz/fs.git
+  GIT_TAG        main)
+FetchContent_MakeAvailable(fs)
+
+target_link_libraries(my_app PRIVATE fs::fs)
+```
+
+## 🚀 Quick start
 
 ```cpp
 #include "fs.hh"
 
-mkdirs("/var/data/shard/3");              // create the whole chain
-if (exists("/var/data/shard/3")) { ... }
-delete_files("/var/data/shard/3", {"*.tmp", "*.lock"});  // glob delete; rmdir if emptied
-copy_file("/src/dir", "/dst/dir");        // recursive directory copy
-auto clean = normalize_path("a/b/../c");  // "a/c" (collapses . and .. and // )
+#include <cassert>
+
+int main() {
+	mkdirs("data/shard/3");                          // the whole chain
+	assert(exists("data/shard/3"));
+	delete_files("data/shard/3", {"*.tmp", "*.lock"}); // and rmdir if it ends up empty
+	assert(normalize_path("a/b/../c") == "a/c");     // no disk access
+}
 ```
 
-## What's in it
+## 🧰 API
 
 | Function | Does |
 | --- | --- |
@@ -28,29 +66,34 @@ auto clean = normalize_path("a/b/../c");  // "a/c" (collapses . and .. and // )
 | `opendir(p, create)` / `find_file_dir(...)` | directory iteration helpers |
 | `build_path_index(p)` | create the index directory chain for a path |
 
-## Dependencies
+All functions are in the global namespace and take `std::string_view` paths.
 
-Uses a few Kronuz libraries for the real work: **io** (EINTR-safe file ops),
-**strings** (`startswith`/`endswith`), **split** (path splitting), **stringified**
-(`string_view` → NUL-terminated). Logging is an **optional** seam: `fs.cc`'s `L_*`
-family is no-op by default (`fs_trace.h`), and the `error::` / `repr` helpers it would
-log appear only inside those macros' arguments, so a host only needs them if it opts
-into real logging via `FS_TRACE_HEADER`.
+## 🎯 When to use it
 
-## Build / test
+- ✅ Server code that manages its own data directories on POSIX systems.
+- ❌ General-purpose path work: prefer `std::filesystem`, which covers most of this
+  portably.
+
+## 📚 Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md): how each helper works and fails.
+- [examples/db_layout.cc](examples/db_layout.cc): a self-checking, Xapiand-style
+  database layout.
+- [AGENTS.md](AGENTS.md): repository map and invariants.
+
+## 🛠️ Building and testing
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
-ctest --test-dir build        # unit test + self-checking Xapiand-style db layout example
+ctest --test-dir build
 ```
 
-## Use (FetchContent)
+## 🤝 Contributing
 
-```cmake
-FetchContent_Declare(fs GIT_REPOSITORY https://github.com/Kronuz/fs.git GIT_TAG main)
-FetchContent_MakeAvailable(fs)
-target_link_libraries(your_app PRIVATE fs::fs)
-```
+Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) first. CI must
+pass on every platform.
 
-To route logging to your own logger, point `FS_TRACE_HEADER` at a header defining the
-`L_*` family (and whatever `error::` / `repr` they reference).
+## 📄 License
+
+MIT, Copyright (c) 2015-2019 Dubalu LLC. See [LICENSE](LICENSE). Extracted from
+[Xapiand](https://github.com/Kronuz/Xapiand).
