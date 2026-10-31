@@ -41,8 +41,9 @@ add_library(fs::fs ALIAS fs)
 # (e.g. via FetchContent) don't build it.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	enable_testing()
+	find_package(Threads REQUIRED)   # the EINTR fault-injection test runs a reader thread
 	add_executable(fs_test test/test.cc)
-	target_link_libraries(fs_test PRIVATE fs)
+	target_link_libraries(fs_test PRIVATE fs Threads::Threads)
 	add_test(NAME fs COMMAND fs_test)
 
 	# A realistic usage example that mirrors Xapiand's database directory layout:
