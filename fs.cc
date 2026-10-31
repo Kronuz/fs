@@ -314,9 +314,14 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 	stringified src_string(src);
 	DIR* dir_src = ::opendir(src_string.c_str());
 	if (dir_src == nullptr) {
-		L_ERR("ERROR: couldn't open directory {}: {} ({}): {}", error::name(errno), errno, error::description(errno));
+		L_ERR("ERROR: couldn't open directory {}: {} ({}): {}", src_string, error::name(errno), errno, error::description(errno));
 		return -1;
 	}
+
+	struct DirCloser {
+		DIR* dir;
+		~DirCloser() { ::closedir(dir); }
+	} dir_closer{dir_src};
 
 	struct stat buf;
 	stringified dst_string(dst);
@@ -366,9 +371,10 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 				return -1;
 			}
 
-			int dst_fd = io::open(dst_path.c_str(), O_CREAT | O_WRONLY, 0644);
-			if (src_fd == -1) {
+			int dst_fd = io::open(dst_path.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+			if (dst_fd == -1) {
 				L_ERR("ERROR: opening file. {}\n", dst_path);
+				io::close(src_fd);
 				return -1;
 			}
 
@@ -376,6 +382,8 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 				ssize_t bytes = io::read(src_fd, buffer, 4096);
 				if (bytes == -1) {
 					L_ERR("ERROR: reading file. {}: {} ({}): {}\n", src_path, error::name(errno), errno, error::description(errno));
+					io::close(src_fd);
+					io::close(dst_fd);
 					return -1;
 				}
 
@@ -384,6 +392,8 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 				bytes = io::write(dst_fd, buffer, bytes);
 				if (bytes == -1) {
 					L_ERR("ERROR: writing file. {}: {} ({}): {}\n", dst_path, error::name(errno), errno, error::description(errno));
+					io::close(src_fd);
+					io::close(dst_fd);
 					return -1;
 				}
 			}
@@ -391,7 +401,6 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 			io::close(dst_fd);
 		}
 	}
-	::closedir(dir_src);
 	return 0;
 }
 

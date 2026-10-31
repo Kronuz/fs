@@ -75,9 +75,75 @@ static void test_dir_roundtrip() {
 }
 
 
+static std::string slurp(const std::string& path) {
+	std::string out;
+	if (FILE* fp = std::fopen(path.c_str(), "r")) {
+		char buf[256];
+		size_t n;
+		while ((n = std::fread(buf, 1, sizeof(buf), fp)) > 0) {
+			out.append(buf, n);
+		}
+		std::fclose(fp);
+	}
+	return out;
+}
+
+static void spit(const std::string& path, const std::string& data) {
+	FILE* fp = std::fopen(path.c_str(), "w");
+	CHECK(fp != nullptr);
+	if (fp) { std::fwrite(data.data(), 1, data.size(), fp); std::fclose(fp); }
+}
+
+// The lowest free descriptor number moves when a descriptor leaks.
+static int next_fd() {
+	int fd = ::dup(0);
+	::close(fd);
+	return fd;
+}
+
+static void test_copy_file() {
+	char tmpl[] = "fs_copy_test.XXXXXX";
+	char* d = ::mkdtemp(tmpl);
+	CHECK(d != nullptr);
+	if (d == nullptr) {
+		return;
+	}
+	std::string base = d;
+	std::string src = base + "/src";
+	std::string dst = base + "/dst";
+	CHECK(mkdirs(src) && mkdirs(dst));
+
+	// A shorter copy over a longer existing file leaves no old tail.
+	spit(src + "/f", "short");
+	spit(dst + "/f", "a much longer existing destination");
+	CHECK(copy_file(src, dst, false, "f") == 0);
+	CHECK(slurp(dst + "/f") == "short");
+
+	// A failing destination open reports the error and leaks no descriptor.
+	std::string blocked = base + "/blocked";
+	CHECK(mkdirs(blocked + "/f"));
+	int fd_before = next_fd();
+	CHECK(copy_file(src, blocked, false, "f") == -1);
+	CHECK(next_fd() == fd_before);
+
+	// A successful copy leaks nothing either.
+	CHECK(copy_file(src, dst, false, "f") == 0);
+	CHECK(next_fd() == fd_before);
+
+	::unlink((src + "/f").c_str());
+	::unlink((dst + "/f").c_str());
+	::rmdir((blocked + "/f").c_str());
+	::rmdir(blocked.c_str());
+	::rmdir(src.c_str());
+	::rmdir(dst.c_str());
+	::rmdir(base.c_str());
+}
+
+
 int main() {
 	test_normalize_path();
 	test_dir_roundtrip();
+	test_copy_file();
 
 	if (failures != 0) {
 		std::fprintf(stderr, "%d check(s) failed\n", failures);
