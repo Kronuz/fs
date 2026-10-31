@@ -72,12 +72,8 @@ All functions are in the global namespace and take `std::string_view` paths.
 
 `copy_file` returns `0` only when every byte of every copied file was written and the
 destination closed cleanly; a failed or short write (a full disk, `RLIMIT_FSIZE`, a quota
-reported at `close`) returns `-1` and logs the error. A signal (`EINTR`) is retried.
-
-> **Behavior change (fix).** `copy_file` treated the count `io::write` returns after a
-> partial write as success, so a write that ran out of room mid-chunk left a truncated copy and
-> returned `0`, and it ignored the destination's `close` result. It now returns `-1` in both
-> cases. The partial destination file is left in place, as for any other failure.
+reported at `close`) returns `-1` and logs the error, and leaves the partial destination
+file in place, as for any other failure. A signal (`EINTR`) is retried.
 
 ## 🎯 When to use it
 
@@ -91,6 +87,7 @@ reported at `close`) returns `-1` and logs the error. A signal (`EINTR`) is retr
 - [examples/db_layout.cc](examples/db_layout.cc): a self-checking, Xapiand-style
   database layout.
 - [AGENTS.md](AGENTS.md): repository map and invariants.
+- [CHANGELOG.md](CHANGELOG.md): behavior changes, newest first.
 
 ## 🛠️ Building and testing
 
