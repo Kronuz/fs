@@ -378,27 +378,55 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 				return -1;
 			}
 
+			// Copy to EOF. io::write loops to the full count but returns the partial count
+			// when a later write fails (a full disk, RLIMIT_FSIZE), so a short count is a
+			// failure of the copy, not a success: keep writing the rest, and give up with the
+			// error when no more can be written. A signal (EINTR) is retried, whether or not
+			// io's own retry is enabled.
+			bool failed = false;
 			while (true) {
-				ssize_t bytes = io::read(src_fd, buffer, 4096);
+				ssize_t bytes = io::read(src_fd, buffer, sizeof(buffer));
+				if (bytes == -1 && errno == EINTR) {
+					continue;
+				}
 				if (bytes == -1) {
 					L_ERR("ERROR: reading file. {}: {} ({}): {}\n", src_path, error::name(errno), errno, error::description(errno));
-					io::close(src_fd);
-					io::close(dst_fd);
-					return -1;
+					failed = true;
+					break;
 				}
 
 				if (bytes == 0) { break; }
 
-				bytes = io::write(dst_fd, buffer, bytes);
-				if (bytes == -1) {
-					L_ERR("ERROR: writing file. {}: {} ({}): {}\n", dst_path, error::name(errno), errno, error::description(errno));
-					io::close(src_fd);
-					io::close(dst_fd);
-					return -1;
+				const unsigned char* p = buffer;
+				size_t left = static_cast<size_t>(bytes);
+				while (left != 0) {
+					ssize_t wrote = io::write(dst_fd, p, left);
+					if (wrote > 0) {
+						p += wrote;
+						left -= static_cast<size_t>(wrote);
+						continue;
+					}
+					if (wrote == -1 && errno == EINTR) {
+						continue;
+					}
+					int e = wrote == 0 ? EIO : errno;   // write() never returns 0 for a non-empty buffer
+					L_ERR("ERROR: writing file. {}: {} ({}): {}\n", dst_path, error::name(e), e, error::description(e));
+					failed = true;
+					break;
+				}
+				if (failed) {
+					break;
 				}
 			}
 			io::close(src_fd);
-			io::close(dst_fd);
+			// The close of a written file can report a deferred write error (NFS, quota).
+			if (io::close(dst_fd) == -1 && !failed) {
+				L_ERR("ERROR: closing file. {}: {} ({}): {}\n", dst_path, error::name(errno), errno, error::description(errno));
+				failed = true;
+			}
+			if (failed) {
+				return -1;
+			}
 		}
 	}
 	return 0;

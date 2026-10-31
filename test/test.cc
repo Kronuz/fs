@@ -4,10 +4,19 @@
 
 #include "fs.hh"
 
+#include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <string>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <thread>
 #include <unistd.h>
+
+#include "io.hh"
 
 static int failures = 0;
 #define CHECK(cond)                                                              \
@@ -140,10 +149,103 @@ static void test_copy_file() {
 }
 
 
+// copy_file under injected write failures. Oracle: a copy that did not write every byte of
+// the source is a failure (-1); one that wrote them all is 0 and byte-identical.
+static void test_copy_file_faults() {
+	char tmpl[] = "fs_copy_fault.XXXXXX";
+	char* d = ::mkdtemp(tmpl);
+	CHECK(d != nullptr);
+	if (d == nullptr) {
+		return;
+	}
+	std::string base = d;
+	std::string src = base + "/src";
+	std::string dst = base + "/dst";
+	CHECK(mkdirs(src) && mkdirs(dst));
+	std::string payload(6100, 'x');   // one full 4096-byte chunk and a 2004-byte tail
+	for (std::size_t i = 0; i < payload.size(); ++i) { payload[i] = static_cast<char>('a' + i % 26); }
+	spit(src + "/f", payload);
+	int fd_before = next_fd();
+
+	// RLIMIT_FSIZE: the second chunk is written only up to the limit (a short write, then
+	// EFBIG), and the source ends there, so nothing after it would reveal the loss.
+	{
+		struct rlimit old{};
+		CHECK(::getrlimit(RLIMIT_FSIZE, &old) == 0);
+		auto old_handler = ::signal(SIGXFSZ, SIG_IGN);
+		struct rlimit lim = old;
+		lim.rlim_cur = 6000;
+		CHECK(::setrlimit(RLIMIT_FSIZE, &lim) == 0);
+		int rc = copy_file(src, dst, false, "f");
+		::setrlimit(RLIMIT_FSIZE, &old);
+		::signal(SIGXFSZ, old_handler);
+		CHECK(rc == -1);
+		CHECK(next_fd() == fd_before);   // the error path leaks nothing
+		::unlink((dst + "/f").c_str());
+	}
+
+	// A destination that refuses every write (ENOSPC), where the platform has one.
+	if (::access("/dev/full", W_OK) == 0) {
+		CHECK(::symlink("/dev/full", (dst + "/f").c_str()) == 0);
+		CHECK(copy_file(src, dst, false, "f") == -1);
+		CHECK(next_fd() == fd_before);
+		::unlink((dst + "/f").c_str());
+	}
+
+	// EINTR with io's own retry off: the copy retries the interrupted write itself. The
+	// destination is a FIFO whose reader is slow, so the writer blocks in write() and the
+	// timer signal (installed without SA_RESTART) interrupts it.
+	{
+		std::string big(1 << 20, 'q');
+		for (std::size_t i = 0; i < big.size(); ++i) { big[i] = static_cast<char>(i * 131 + i / 7); }
+		spit(src + "/f", big);
+		CHECK(::mkfifo((dst + "/f").c_str(), 0600) == 0);
+
+		struct sigaction sa{}, old_sa{};
+		sa.sa_handler = [](int) {};
+		sigemptyset(&sa.sa_mask);
+		sa.sa_flags = 0;   // no SA_RESTART
+		CHECK(::sigaction(SIGALRM, &sa, &old_sa) == 0);
+		struct itimerval tv{{0, 2000}, {0, 2000}}, off{};
+		bool was = io::ignore_eintr().exchange(false);
+
+		std::string got;
+		std::thread reader([&] {
+			int fd = ::open((dst + "/f").c_str(), O_RDONLY);
+			char buf[1024];
+			::usleep(20000);   // let the writer fill the pipe and block
+			while (fd >= 0) {
+				ssize_t n = ::read(fd, buf, sizeof(buf));
+				if (n > 0) { got.append(buf, static_cast<std::size_t>(n)); ::usleep(100); continue; }
+				if (n == -1 && errno == EINTR) { continue; }
+				break;
+			}
+			if (fd >= 0) { ::close(fd); }
+		});
+		::setitimer(ITIMER_REAL, &tv, nullptr);
+		int rc = copy_file(src, dst, false, "f");
+		::setitimer(ITIMER_REAL, &off, nullptr);
+		reader.join();
+		io::ignore_eintr().store(was);
+		::sigaction(SIGALRM, &old_sa, nullptr);
+		CHECK(rc == 0);
+		CHECK(got == big);
+		CHECK(next_fd() == fd_before);
+		::unlink((dst + "/f").c_str());
+	}
+
+	::unlink((src + "/f").c_str());
+	::rmdir(src.c_str());
+	::rmdir(dst.c_str());
+	::rmdir(base.c_str());
+}
+
+
 int main() {
 	test_normalize_path();
 	test_dir_roundtrip();
 	test_copy_file();
+	test_copy_file_faults();
 
 	if (failures != 0) {
 		std::fprintf(stderr, "%d check(s) failed\n", failures);
