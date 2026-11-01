@@ -6,14 +6,17 @@
 
 #include <cerrno>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cctype>
 #include <fcntl.h>
 #include <string>
+#include <string_view>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 
@@ -37,6 +40,132 @@ static void test_normalize_path() {
 	CHECK(normalize_path("/a/b/../../c") == "/c");
 	// slashed=true keeps a trailing slash.
 	CHECK(normalize_path("a/b", /*slashed=*/true) == "a/b/");
+}
+
+
+// The pointer-range normalize_path before it stopped forming end - 1, frozen: the oracle for every
+// non-empty input (the new loop must give the same bytes), never edited.
+static size_t frozen_normalize_path(const char* src, const char* end, char* dst, bool slashed, bool keep_slash) {
+	int levels = 0;
+	char* ret = dst;
+	char ch = '\0';
+	const char* last = keep_slash ? end - 1 : end;
+	while (src <= last) {
+		ch = src == end ? '/' : *src;
+		++src;
+		if (ch == '.' && (levels != 0 || dst == ret || *(dst - 1) == '/' )) {
+			*dst++ = ch;
+			++levels;
+		} else if (ch == '/') {
+			while (levels != 0 && dst > ret + 1) {
+				if (*--dst == '/') {
+					--levels;
+				}
+			}
+			if (dst == ret || *(dst - 1) != '/') {
+				*dst++ = ch;
+			}
+		} else {
+			*dst++ = ch;
+			levels = 0;
+		}
+	}
+	if (ch == '.' && levels == 1) {
+		ch = *--dst;
+	}
+	if (dst > ret + 1 && !keep_slash) {
+		if (slashed) {
+			if (ch != '/') {
+				*dst++ = '/';
+			}
+		} else {
+			if (ch == '/') {
+				--dst;
+			}
+		}
+	}
+	return dst - ret;
+}
+
+static std::string frozen_normalize(std::string_view src, bool slashed, bool keep_slash) {
+	std::string dst;
+	dst.resize(src.size() + 1);
+	dst.resize(frozen_normalize_path(src.data(), src.data() + src.size(), &dst[0], slashed, keep_slash));
+	return dst;
+}
+
+// Runs f in a child process: its exit status, or -1 when a signal killed it (a crash).
+template <typename F>
+static int in_child(F f) {
+	std::fflush(nullptr);
+	pid_t pid = ::fork();
+	if (pid == 0) {
+		::_exit(f());
+	}
+	int status = 0;
+	if (pid < 0 || ::waitpid(pid, &status, 0) != pid) {
+		return -2;
+	}
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+// normalize_path over every string of "a", "." and "/" up to length 8 and 30,000 random ones up to 24,
+// in all four flag combinations, equals the frozen implementation. An empty input is the one place the
+// old loop is not usable as an oracle (it formed end - 1, which for a default-constructed view wrapped
+// around and walked off the buffer), so its four results are stated: no component, no slash to keep.
+// Oracle for those: the frozen implementation on a one-byte buffer holding "" (verified when this was
+// written), i.e. "/" with keep_slash off and "" with it on.
+static void test_normalize_path_frozen() {
+	const char alphabet[] = {'a', '.', '/'};
+	std::size_t compared = 0;
+	for (int length = 1; length <= 8; ++length) {
+		std::size_t total = 1;
+		for (int i = 0; i < length; ++i) { total *= 3; }
+		for (std::size_t n = 0; n < total; ++n) {
+			std::string s;
+			for (std::size_t m = n, i = 0; i < static_cast<std::size_t>(length); ++i, m /= 3) { s.push_back(alphabet[m % 3]); }
+			for (int flags = 0; flags < 4; ++flags) {
+				bool slashed = flags & 1, keep_slash = flags & 2;
+				if (normalize_path(s, slashed, keep_slash) != frozen_normalize(s, slashed, keep_slash)) {
+					std::fprintf(stderr, "FAIL normalize_path(\"%s\", %d, %d) = \"%s\", frozen \"%s\"\n", s.c_str(), slashed, keep_slash,
+						normalize_path(s, slashed, keep_slash).c_str(), frozen_normalize(s, slashed, keep_slash).c_str());
+					++failures;
+					return;
+				}
+				++compared;
+			}
+		}
+	}
+	std::uint64_t x = 0x9e3779b97f4a7c15ULL;
+	for (int round = 0; round < 30000; ++round) {
+		x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+		std::string s;
+		for (std::uint64_t m = x, i = 0; i < 1 + x % 24; ++i, m = m * 6364136223846793005ULL + 1442695040888963407ULL) { s.push_back(alphabet[(m >> 33) % 3]); }
+		for (int flags = 0; flags < 4; ++flags) {
+			bool slashed = flags & 1, keep_slash = flags & 2;
+			CHECK(normalize_path(s, slashed, keep_slash) == frozen_normalize(s, slashed, keep_slash));
+			++compared;
+		}
+	}
+	CHECK(compared > 100000);
+
+	CHECK(normalize_path("", false, false) == "/");
+	CHECK(normalize_path("", true, false) == "/");
+	CHECK(normalize_path("", false, true) == "");
+	CHECK(normalize_path("", true, true) == "");
+}
+
+// A default-constructed std::string_view (null data pointer) is an empty path like "". normalize_path
+// used to crash on it with keep_slash (end - 1 wrapped around, the loop read from address 1).
+static void test_normalize_path_null_view() {
+	for (int flags = 0; flags < 4; ++flags) {
+		bool slashed = flags & 1, keep_slash = flags & 2;
+		int status = in_child([&] { return normalize_path(std::string_view(), slashed, keep_slash) == normalize_path("", slashed, keep_slash) ? 0 : 1; });
+		if (status != 0) {
+			std::fprintf(stderr, "FAIL normalize_path(std::string_view(), %d, %d): %s\n", slashed, keep_slash, status == -1 ? "crashed" : "differs from \"\"");
+			++failures;
+		}
+	}
 }
 
 
@@ -178,6 +307,62 @@ static void test_copy_file() {
 	::rmdir(base.c_str());
 }
 
+
+// A default-constructed std::string_view into every function that hands a path to stringified or the
+// kernel: an empty path names nothing, so each returns its failure value and creates or removes nothing,
+// and none crashes (stringified once read the byte after a view, a null dereference for this one).
+static void test_null_view_paths() {
+	char tmpl[] = "fs_null_view.XXXXXX";
+	char* tmp = ::mkdtemp(tmpl);
+	CHECK(tmp != nullptr);
+	if (tmp == nullptr) {
+		return;
+	}
+	std::string base = tmp;
+	spit(base + "/f", "data");
+	std::string_view n;
+
+	struct Case { const char* what; int status; };
+	Case cases[] = {
+		{"exists", in_child([&] { return exists(n) ? 1 : 0; })},
+		{"mkdir", in_child([&] { return mkdir(n) ? 1 : 0; })},
+		{"mkdirs", in_child([&] { return mkdirs(n) ? 1 : 0; })},
+		{"build_path_index", in_child([&] { return build_path_index(n) ? 1 : 0; })},
+		{"opendir", in_child([&] { return opendir(n, false) != nullptr ? 1 : 0; })},
+		{"opendir, create", in_child([&] { return opendir(n, true) != nullptr ? 1 : 0; })},
+		{"delete_files", in_child([&] { delete_files(n); return 0; })},
+		{"move_files, null source", in_child([&] { move_files(n, base); return 0; })},
+		{"copy_file, null source", in_child([&] { return copy_file(n, base) == -1 ? 0 : 1; })},
+		{"copy_file, null destination", in_child([&] { return copy_file(base, n, false) == -1 ? 0 : 1; })},
+		{"copy_file, null destination, create", in_child([&] { return copy_file(base, n, true) == -1 ? 0 : 1; })},
+		{"find_file_dir, null prefix", in_child([&] {
+			DIR* dir = opendir(base, false);
+			File_ptr p;
+			find_file_dir(dir, p, n, true);
+			int found = p.ent != nullptr && std::string_view(p.ent->d_name) == "f" ? 0 : 1;
+			::closedir(dir);
+			return found;
+		})},
+		{"find_file_dir, null suffix", in_child([&] {
+			DIR* dir = opendir(base, false);
+			File_ptr p;
+			find_file_dir(dir, p, n, false);
+			int found = p.ent != nullptr && std::string_view(p.ent->d_name) == "f" ? 0 : 1;
+			::closedir(dir);
+			return found;
+		})},
+	};
+	for (const auto& c : cases) {
+		if (c.status != 0) {
+			std::fprintf(stderr, "FAIL null string_view into %s: %s\n", c.what, c.status == -1 ? "crashed" : "wrong result");
+			++failures;
+		}
+	}
+	CHECK(slurp(base + "/f") == "data");   // nothing was moved or deleted
+
+	::unlink((base + "/f").c_str());
+	::rmdir(base.c_str());
+}
 
 // A directory copy, or a named file copy, whose source and destination are one file must be
 // refused (-1) and leave the source as it was. Oracle: cp(1) ("a and b are identical (not
@@ -439,9 +624,12 @@ static void test_copy_file_faults() {
 
 int main() {
 	test_normalize_path();
+	test_normalize_path_frozen();
+	test_normalize_path_null_view();
 	test_dir_roundtrip();
 	test_empty_and_root_paths();
 	test_copy_file();
+	test_null_view_paths();
 	test_copy_file_same_file();
 	test_move_files_same_file();
 	test_copy_file_faults();

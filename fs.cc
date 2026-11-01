@@ -472,10 +472,17 @@ size_t normalize_path(const char* src, const char* end, char* dst, bool slashed,
 	int levels = 0;
 	char* ret = dst;
 	char ch = '\0';
-	const char* last = keep_slash ? end - 1 : end;
-	while (src <= last) {
-		ch = src == end ? '/' : *src;
-		++src;
+	// Visit every byte of [src, end), then the closing '/' of the last component unless keep_slash.
+	// There is no end - 1: for an empty or default-constructed view (a null src) it wrapped around and
+	// the loop ran past the buffer.
+	bool closing = !keep_slash && src <= end;
+	while (src < end || closing) {
+		if (src < end) {
+			ch = *src++;
+		} else {
+			ch = '/';
+			closing = false;
+		}
 		if (ch == '.' && (levels != 0 || dst == ret || *(dst - 1) == '/' )) {
 			*dst++ = ch;
 			++levels;

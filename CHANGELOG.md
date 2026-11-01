@@ -7,6 +7,14 @@ All notable changes to `fs` are recorded here, newest first. The format follows
 
 ### Fixed
 
+- `normalize_path` crashed on a default-constructed `std::string_view` (a null
+  data pointer) with `keep_slash`: the loop bound `end - 1` wrapped around, so
+  the loop ran from the null pointer through the address space. The loop now
+  counts the bytes of `[src, end)` and then the closing `/`, with no pointer
+  before the range, and a null view gives the result of `""`. The output for
+  every non-empty input is unchanged (compared with a frozen copy of the old
+  loop over every string of `a`, `.` and `/` up to length 8 and 30,000 random
+  ones, in all four flag combinations).
 - `mkdirs("")` read `front()` of an empty `string_view`, which is undefined
   behavior: an abort under `_GLIBCXX_ASSERTIONS`, a crash for a
   default-constructed view, and `true` otherwise. An empty path names no
