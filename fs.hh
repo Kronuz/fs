@@ -47,7 +47,7 @@ bool exists(std::string_view path);
 
 bool mkdir(std::string_view path);
 
-bool mkdirs(std::string_view path);
+bool mkdirs(std::string_view path);   // false for an empty path
 
 bool build_path_index(std::string_view path_index);
 

@@ -7,6 +7,14 @@ All notable changes to `fs` are recorded here, newest first. The format follows
 
 ### Fixed
 
+- `mkdirs("")` read `front()` of an empty `string_view`, which is undefined
+  behavior: an abort under `_GLIBCXX_ASSERTIONS`, a crash for a
+  default-constructed view, and `true` otherwise. An empty path names no
+  directory (`mkdir -p ""` fails with `ENOENT`), so `mkdirs` and
+  `build_path_index("")` now return `false` and create nothing.
+  `build_path_index("/name")`, a file in the root, reached the same call with
+  `substr(0, 0)`; its parent is now `/`, which exists, so it still returns
+  `true`.
 - `copy_file` emptied its source when the source and the destination were one
   file (a directory copied onto itself, `copy_file(d, d, false, "f", "f")`, a
   destination that is a hard link or symlink to the source, another spelling of

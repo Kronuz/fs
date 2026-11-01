@@ -85,6 +85,35 @@ static void test_dir_roundtrip() {
 }
 
 
+// An empty path names no directory: mkdir -p "" fails with ENOENT, so mkdirs and build_path_index
+// return false and create nothing. mkdirs used to read front() of the empty view (undefined
+// behavior: an abort under _GLIBCXX_ASSERTIONS, a crash for a default-constructed view, true
+// otherwise). The parent of a file in the root, "/name", is "/", which exists.
+static void test_empty_and_root_paths() {
+	CHECK(!mkdirs(""));
+	CHECK(!mkdirs(std::string_view()));
+	CHECK(!build_path_index(""));
+	CHECK(!build_path_index(std::string_view()));
+
+	CHECK(mkdirs("/"));
+	CHECK(build_path_index("/fs_test_no_such_file"));
+	CHECK(!exists("/fs_test_no_such_file"));   // only the parent is ensured
+
+	char tmpl[] = "fs_index_test.XXXXXX";
+	char* tmp = ::mkdtemp(tmpl);
+	CHECK(tmp != nullptr);
+	if (tmp == nullptr) {
+		return;
+	}
+	std::string base = tmp;
+	CHECK(build_path_index(base + "/a/b/file"));   // creates a/b, not file
+	CHECK(exists(base + "/a/b") && !exists(base + "/a/b/file"));
+	::rmdir((base + "/a/b").c_str());
+	::rmdir((base + "/a").c_str());
+	::rmdir(base.c_str());
+}
+
+
 static std::string slurp(const std::string& path) {
 	std::string out;
 	if (FILE* fp = std::fopen(path.c_str(), "r")) {
@@ -411,6 +440,7 @@ static void test_copy_file_faults() {
 int main() {
 	test_normalize_path();
 	test_dir_roundtrip();
+	test_empty_and_root_paths();
 	test_copy_file();
 	test_copy_file_same_file();
 	test_move_files_same_file();

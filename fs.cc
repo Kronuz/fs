@@ -235,6 +235,10 @@ bool mkdir(std::string_view path) {
 bool mkdirs(std::string_view path) {
 	L_CALL("mkdirs({})", repr(path));
 
+	// An empty path names no directory (mkdir -p "" fails with ENOENT); the code below reads path.front().
+	if (path.empty()) {
+		return false;
+	}
 	if (exists(path)) {
 		return true;
 	}
@@ -261,7 +265,8 @@ bool build_path_index(std::string_view path_index) {
 	if (found == std::string_view::npos) {
 		return mkdirs(path_index);
 	}
-	return mkdirs(path_index.substr(0, found));
+	// The parent of a file in the root, "/name", is "/" (substr(0, 0) would be empty).
+	return mkdirs(path_index.substr(0, std::max<size_t>(found, 1)));
 }
 
 

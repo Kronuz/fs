@@ -69,7 +69,8 @@ int main() {
 | `opendir(p, create)` / `find_file_dir(...)` | directory iteration helpers |
 | `build_path_index(p)` | create the index directory chain for a path |
 
-All functions are in the global namespace and take `std::string_view` paths.
+All functions are in the global namespace and take `std::string_view` paths. `mkdirs` and
+`build_path_index` return `false` for an empty path, as `mkdir -p ""` fails.
 
 `copy_file` returns `0` only when every byte of every copied file was written and the
 destination closed cleanly; a failed or short write (a full disk, `RLIMIT_FSIZE`, a quota
