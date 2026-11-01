@@ -13,6 +13,10 @@ project(fs LANGUAGES CXX)
 
 include(FetchContent)
 
+# The normalize_path micro-bench (bench/normalize_path_bench.cc), off by default: with the library's
+# loop and the two it replaced frozen in the file, three binaries that ab_compare.py can pair.
+option(FS_BUILD_BENCH "Build the normalize_path micro-bench" OFF)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
@@ -54,6 +58,31 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	target_compile_features(fs_identity_test PRIVATE cxx_std_20)
 	target_link_libraries(fs_identity_test PRIVATE io::io strings::strings split stringified::stringified)
 	add_test(NAME fs_identity COMMAND fs_identity_test)
+
+	# normalize_path against the loop it replaced, frozen, over every short string and random ones, on
+	# exact-size blocks (an AddressSanitizer build fails on a byte read or written past them).
+	add_executable(fs_normalize_test test/normalize_test.cc)
+	target_link_libraries(fs_normalize_test PRIVATE fs)
+	add_test(NAME fs_normalize COMMAND fs_normalize_test)
+
+	# The expected values of test/test.cc's normalize_path tests (the digest and the table) are
+	# posixpath.normpath's: tools/normpath_oracle.py regenerates them, and this checks the file.
+	find_package(Python3 COMPONENTS Interpreter QUIET)
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME fs_normpath_oracle COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/tools/normpath_oracle.py" --check "${CMAKE_CURRENT_SOURCE_DIR}/test/test.cc")
+	endif()
+
+	# bench/normalize_path_bench.cc: the library's loop, the loop of 8934dbc and the one of ce16118.
+	if(FS_BUILD_BENCH)
+		add_executable(normalize_path_bench bench/normalize_path_bench.cc)
+		target_link_libraries(normalize_path_bench PRIVATE fs)
+		foreach(frozen HEAD START)
+			string(TOLOWER ${frozen} lower)
+			add_executable(normalize_path_bench_${lower} bench/normalize_path_bench.cc)
+			target_include_directories(normalize_path_bench_${lower} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+			target_compile_definitions(normalize_path_bench_${lower} PRIVATE NP_FROZEN_${frozen})
+		endforeach()
+	endif()
 
 	# A realistic usage example that mirrors Xapiand's database directory layout:
 	# normalize a data path, create the .xapiand tree, receive files into a
