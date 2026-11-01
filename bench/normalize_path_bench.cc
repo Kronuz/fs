@@ -7,7 +7,7 @@
 //                               in fs.cc), through the same string wrapper
 //   normalize_path_bench_start  the loop of ce16118, frozen here, the campaign's START: it gives the same bytes
 //                               as the others on the rows of the default mode, and different bytes on the rows
-//                               of `diff` (an empty path, a ".." that pops the first component)
+//                               of `diff` (an empty path, a leading "./" or "../", a ".." that pops the first component)
 //
 // Usage: normalize_path_bench [diff|dump]
 //   (none)  the rows whose result is the same for all three, one line each: `label  X ns  chk HEX`, ns per
@@ -15,9 +15,8 @@
 //           between the implementations (ab_compare.py voids a row whose checksums differ).
 //   diff    the rows whose result differs from START's (the fixes), time only, no checksum.
 //   dump    every result, one line each (a way to see the bytes).
-// The timed loop takes the size and two bytes of every result and nothing more: the gate's micro.cc folded
-// every byte of every result into an FNV-1a (a chain of 4 cycles a byte), which was most of the time of a long
-// path and hid the difference between loops.
+// The timed loop takes the size and two bytes of every result and nothing more; the gate's micro.cc folded every
+// byte of every result into an FNV-1a inside the timed loop. Here the checksum is the fold of one result, outside it.
 #include "fs.hh"
 
 #include <algorithm>
@@ -196,8 +195,8 @@ int main(int argc, char** argv) {
 		{"np_xapiand_path", "/var/db//xapiand/./data/../data/index/", false, false, false},
 		{"np_long", longp, false, false, false},
 		{"np_long_dots", longdots, false, false, false},
-		{"np_leading_dot", "./a/b/c", false, false, false},
-		{"np_leading_dotdot", "../a/b/c", false, false, false},
+		{"np_leading_dot", "./a/b/c", false, false, true},
+		{"np_leading_dotdot", "../a/b/c", false, false, true},
 		{"np_dot", ".", false, false, false},
 		{"np_root", "/", false, false, false},
 		{"np_abs_dotdot_end", "/a/b/c/..", false, false, false},
