@@ -55,8 +55,11 @@ DIR* opendir(std::string_view path, bool create = false);
 
 void find_file_dir(DIR* dir, File_ptr& fptr, std::string_view pattern, bool pre_suf_fix);
 
-// Copy all directory if file_name and new_name are empty. Returns 0 only when every file was
-// written in full and closed cleanly; -1 on any failed or short write (a partial file is left).
+// Copy the regular files of directory src into directory dst (subdirectories are not entered):
+// all of them, or only file_name (stored as new_name when given). Returns 0 only when every file
+// was written in full and closed cleanly; -1 at the first failure, including a short write (a
+// partial file is left) and a source and destination that are one file (same device and inode:
+// the same path, a hard link, a symlink, a case-insensitive spelling). That file is not touched.
 int copy_file(std::string_view src, std::string_view dst, bool create = true, std::string_view file_name = "", std::string_view new_name = "");
 
 std::string normalize_path(std::string_view src, bool slashed = false, bool keep_slash = false);

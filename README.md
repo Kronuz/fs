@@ -7,7 +7,7 @@ Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a colle
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
 The filesystem chores a database server needs, in C++20: create a directory chain,
-delete or quarantine files by glob, copy or move a tree, and normalize a path without
+delete or quarantine files by glob, copy or move a directory's files, and normalize a path without
 touching the disk.
 
 ![fs: helpers over io, strings, split, and stringified](assets/architecture.svg)
@@ -17,7 +17,8 @@ touching the disk.
 - 📁 **`mkdirs`**: the whole chain in one call.
 - 🧹 **`delete_files`** by glob, removing the directory when it ends up empty.
 - 🚧 **`quarantine_files`**: rename suspect files aside instead of deleting them.
-- 📋 **`copy_file` and `move_files`** for directory trees.
+- 📋 **`copy_file` and `move_files`** for the files of a directory; a copy onto the
+  same file is refused, never truncating it.
 - ✂️ **`normalize_path`**: collapses `.`, `..`, and repeated `/` as a pure string
   operation.
 - 🛡️ **EINTR-safe** through [io](https://github.com/Kronuz/io); logging is an optional
@@ -64,7 +65,7 @@ int main() {
 | `exists(p)` / `mkdir(p)` / `mkdirs(p)` | stat / single dir / recursive dir chain |
 | `delete_files(p, patterns)` | `fnmatch`-delete matching files; `rmdir` the dir if it ends up empty |
 | `quarantine_files(p, patterns, suffix)` | rename matching files aside (into a `mkstemp` suffix) instead of deleting |
-| `move_files(src, dst)` / `copy_file(...)` | move / recursively copy a directory tree |
+| `move_files(src, dst)` / `copy_file(...)` | move / copy the regular files of a directory (subdirectories are not entered) |
 | `opendir(p, create)` / `find_file_dir(...)` | directory iteration helpers |
 | `build_path_index(p)` | create the index directory chain for a path |
 
@@ -74,6 +75,13 @@ All functions are in the global namespace and take `std::string_view` paths.
 destination closed cleanly; a failed or short write (a full disk, `RLIMIT_FSIZE`, a quota
 reported at `close`) returns `-1` and logs the error, and leaves the partial destination
 file in place, as for any other failure. A signal (`EINTR`) is retried.
+
+`copy_file` refuses to copy a file onto itself: when the source and the destination are one
+file (the same device and inode, reached by the same path, another spelling of it, a
+symlink, a hard link or a case-insensitive name) it returns `-1`, as `cp` reports
+"identical (not copied)", and the file is left as it was. The check reads the identity from
+the open descriptors, before the destination is truncated. A directory copy stops at the
+first failure.
 
 ## 🎯 When to use it
 

@@ -371,11 +371,41 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 				return -1;
 			}
 
-			int dst_fd = io::open(dst_path.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0644);
+			// No O_TRUNC here: when both paths name one file (a directory copied onto itself, a
+			// hard link, a symlink, another spelling of the path, a case-insensitive match),
+			// truncating at open would empty the source before it is read. The identity is read
+			// from the open descriptors, so no path can change under the check.
+			int dst_fd = io::open(dst_path.c_str(), O_CREAT | O_WRONLY, 0644);
 			if (dst_fd == -1) {
 				L_ERR("ERROR: opening file. {}\n", dst_path);
 				io::close(src_fd);
 				return -1;
+			}
+
+			struct stat src_st, dst_st;
+			if (io::fstat(src_fd, &src_st) == -1 || io::fstat(dst_fd, &dst_st) == -1) {
+				L_ERR("ERROR: obtaining file information. {} {}: {} ({}): {}\n", src_path, dst_path, error::name(errno), errno, error::description(errno));
+				io::close(src_fd);
+				io::close(dst_fd);
+				return -1;
+			}
+			if (src_st.st_dev == dst_st.st_dev && src_st.st_ino == dst_st.st_ino) {
+				L_ERR("ERROR: {} and {} are the same file (not copied)\n", src_path, dst_path);
+				io::close(src_fd);
+				io::close(dst_fd);
+				return -1;
+			}
+
+			// Truncate as O_TRUNC would have: regular files only (a FIFO or a device ignores it).
+			if (S_ISREG(dst_st.st_mode)) {
+				int truncated;
+				while ((truncated = ::ftruncate(dst_fd, 0)) == -1 && errno == EINTR) { }
+				if (truncated == -1) {
+					L_ERR("ERROR: truncating file. {}: {} ({}): {}\n", dst_path, error::name(errno), errno, error::description(errno));
+					io::close(src_fd);
+					io::close(dst_fd);
+					return -1;
+				}
 			}
 
 			// Copy to EOF. io::write loops to the full count but returns the partial count

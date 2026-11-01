@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <fcntl.h>
 #include <string>
 #include <sys/resource.h>
@@ -149,6 +150,172 @@ static void test_copy_file() {
 }
 
 
+// A directory copy, or a named file copy, whose source and destination are one file must be
+// refused (-1) and leave the source as it was. Oracle: cp(1) ("a and b are identical (not
+// copied)"): a copy never destroys its source. Before the fix the open of the destination
+// truncated the source to 0 bytes and the call returned 0.
+static std::string upper(std::string s) {
+	for (auto& c : s) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); }
+	return s;
+}
+
+static std::string working_directory() {
+	char buf[4096];
+	return ::getcwd(buf, sizeof(buf)) != nullptr ? std::string(buf) : std::string();
+}
+
+static void test_copy_file_same_file() {
+	char tmpl[] = "fs_copy_same.XXXXXX";
+	char* tmp = ::mkdtemp(tmpl);
+	CHECK(tmp != nullptr);
+	if (tmp == nullptr) {
+		return;
+	}
+	std::string base = tmp;
+	std::string d = base + "/d";
+	std::string e = base + "/e";
+	CHECK(mkdirs(d) && mkdirs(e));
+
+	std::string payload(5000, 'p');   // longer than one 4096-byte copy chunk
+	for (std::size_t i = 0; i < payload.size(); ++i) { payload[i] = static_cast<char>('a' + i % 26); }
+	const std::string other = "another file in the directory";
+
+	// Each case starts from the same two files in d; the source is rewritten in place first so
+	// that a case that damaged it cannot hide behind the next.
+	auto refused = [&](const char* what, const std::string& src, const std::string& dst, std::string_view file, std::string_view as) {
+		spit(d + "/f", payload);
+		spit(d + "/other", other);
+		int fd_before = next_fd();
+		int rc = copy_file(src, dst, false, file, as);
+		std::string f_after = slurp(d + "/f");
+		std::string other_after = slurp(d + "/other");
+		bool leaked = next_fd() != fd_before;
+		if (rc != -1 || f_after != payload || other_after != other || leaked) {
+			std::fprintf(stderr, "FAIL same file (%s): rc=%d, d/f %zu -> %zu bytes, d/other %zu -> %zu bytes%s\n", what, rc,
+				payload.size(), f_after.size(), other.size(), other_after.size(), leaked ? ", leaked a descriptor" : "");
+			++failures;
+		}
+	};
+
+	// The same path.
+	refused("directory onto itself", d, d, "", "");
+	refused("one file onto itself", d, d, "f", "f");
+	refused("one file onto itself, no create", d, d, "f", "");
+
+	// Other spellings of the same path.
+	refused("./path", d, "./" + d, "f", "");
+	refused("path/../path", d, d + "/../d", "f", "");
+	refused("doubled and trailing slashes", d, d + "//", "f", "");
+	refused("absolute path", d, working_directory() + "/" + d, "f", "");
+	refused("absolute path, directory copy", d, working_directory() + "/" + d, "", "");
+	refused("both relative spellings", "./" + d, d + "/./", "f", "f");
+
+	// A symlink to the directory, and to the file (one hop and a chain).
+	CHECK(::symlink("d", (base + "/link_d").c_str()) == 0);
+	refused("symlink to the directory", d, base + "/link_d", "f", "");
+	refused("symlink to the directory, directory copy", base + "/link_d", d, "", "");
+	CHECK(::symlink((working_directory() + "/" + d + "/f").c_str(), (e + "/f").c_str()) == 0);
+	refused("symlink to the file", d, e, "f", "");
+	refused("symlink to the file, directory copy", d, e, "", "");
+	::unlink((e + "/f").c_str());
+	CHECK(::symlink((working_directory() + "/" + d + "/f").c_str(), (e + "/g").c_str()) == 0);
+	CHECK(::symlink("g", (e + "/f").c_str()) == 0);
+	refused("chain of symlinks to the file", d, e, "f", "");
+	::unlink((e + "/f").c_str());
+	::unlink((e + "/g").c_str());
+
+	// A hard link to the file, in another directory and in the same one.
+	spit(d + "/f", payload);
+	CHECK(::link((d + "/f").c_str(), (e + "/f").c_str()) == 0);
+	refused("hard link", d, e, "f", "");
+	refused("hard link, directory copy", d, e, "", "");
+	CHECK(slurp(e + "/f") == payload);   // the link still reads the source's bytes
+	::unlink((e + "/f").c_str());
+	CHECK(::link((d + "/f").c_str(), (d + "/g").c_str()) == 0);
+	refused("hard link in the same directory", d, d, "f", "g");
+	::unlink((d + "/g").c_str());
+
+	// The same file reached through a case-insensitive name (the default on APFS and NTFS).
+	struct stat lower_st, upper_st;
+	bool folds_case = ::stat(d.c_str(), &lower_st) == 0 && ::stat(upper(d).c_str(), &upper_st) == 0 &&
+		lower_st.st_dev == upper_st.st_dev && lower_st.st_ino == upper_st.st_ino;
+	if (folds_case) {
+		refused("directory spelled in another case", d, upper(d), "f", "");
+		refused("file name spelled in another case", d, d, "f", "F");
+		refused("directory and file name spelled in another case", d, upper(d), "f", "F");
+	} else {
+		std::puts("fs: case-insensitive cases skipped (case-sensitive filesystem)");
+	}
+
+#if defined(__APPLE__)
+	// The firmlink spelling of the same directory on macOS (the nearest thing to a bind mount
+	// one can make without privileges): a different path to one inode.
+	std::string firmlink = "/System/Volumes/Data" + working_directory() + "/" + d;
+	if (::access(firmlink.c_str(), F_OK) == 0) {
+		refused("firmlink spelling", d, firmlink, "f", "");
+	}
+#elif defined(__linux__)
+	// The same directory through the process's working directory link.
+	std::string via_proc = "/proc/self/cwd/" + d;
+	if (::access(via_proc.c_str(), F_OK) == 0) {
+		refused("/proc/self/cwd spelling", d, via_proc, "f", "");
+	}
+#endif
+
+	// Controls: a different file in the same directory is an ordinary copy, and so is the
+	// same name in another directory.
+	spit(d + "/f", payload);
+	::unlink((d + "/g").c_str());
+	CHECK(copy_file(d, d, false, "f", "g") == 0);
+	CHECK(slurp(d + "/g") == payload);
+	CHECK(slurp(d + "/f") == payload);
+	::unlink((e + "/f").c_str());
+	CHECK(copy_file(d, e, false, "f") == 0);
+	CHECK(slurp(e + "/f") == payload);
+	CHECK(slurp(d + "/f") == payload);
+
+	for (const char* name : {"f", "g", "other"}) {
+		::unlink((d + "/" + name).c_str());
+		::unlink((e + "/" + name).c_str());
+	}
+	::unlink((base + "/link_d").c_str());
+	::rmdir(d.c_str());
+	::rmdir(e.c_str());
+	::rmdir(base.c_str());
+}
+
+
+// move_files renames, and rename(2) onto the same file is a no-op: moving a directory onto
+// itself, or onto a directory holding a hard link to one of its files, never loses a byte.
+static void test_move_files_same_file() {
+	char tmpl[] = "fs_move_same.XXXXXX";
+	char* tmp = ::mkdtemp(tmpl);
+	CHECK(tmp != nullptr);
+	if (tmp == nullptr) {
+		return;
+	}
+	std::string base = tmp;
+	std::string d = base + "/d";
+	std::string e = base + "/e";
+	CHECK(mkdirs(d) && mkdirs(e));
+	const std::string payload(5000, 'm');
+
+	spit(d + "/f", payload);
+	move_files(d, d);
+	CHECK(slurp(d + "/f") == payload);
+
+	CHECK(::link((d + "/f").c_str(), (e + "/f").c_str()) == 0);
+	move_files(d, e);
+	CHECK(slurp(e + "/f") == payload);
+
+	::unlink((d + "/f").c_str());
+	::unlink((e + "/f").c_str());
+	::rmdir(d.c_str());
+	::rmdir(e.c_str());
+	::rmdir(base.c_str());
+}
+
+
 // copy_file under injected write failures. Oracle: a copy that did not write every byte of
 // the source is a failure (-1); one that wrote them all is 0 and byte-identical.
 static void test_copy_file_faults() {
@@ -245,6 +412,8 @@ int main() {
 	test_normalize_path();
 	test_dir_roundtrip();
 	test_copy_file();
+	test_copy_file_same_file();
+	test_move_files_same_file();
 	test_copy_file_faults();
 
 	if (failures != 0) {

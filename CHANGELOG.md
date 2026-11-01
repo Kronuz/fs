@@ -7,6 +7,20 @@ All notable changes to `fs` are recorded here, newest first. The format follows
 
 ### Fixed
 
+- `copy_file` emptied its source when the source and the destination were one
+  file (a directory copied onto itself, `copy_file(d, d, false, "f", "f")`, a
+  destination that is a hard link or symlink to the source, another spelling of
+  the path, a case-insensitive name): the destination was opened with `O_TRUNC`
+  before the source was read, so the open truncated the source and the call
+  returned `0` having copied nothing. The destination is now opened without
+  `O_TRUNC`, `fstat` compares the device and inode of the two open descriptors,
+  and a match returns `-1` before anything is written, as `cp` reports
+  "identical (not copied)". Only then is a regular destination truncated
+  (`ftruncate`; a FIFO or a device ignored `O_TRUNC` and is left alone). A
+  directory copy stops at the first failure, so a same-file match in the middle
+  of a directory leaves the files after it uncopied.
+- The README described `copy_file` as copying a directory tree. It copies the
+  regular files of one directory and does not enter subdirectories.
 - `copy_file` treated the count `io::write` returns after a partial write as
   success, so a write that ran out of room mid-chunk (full disk,
   `RLIMIT_FSIZE`) left a truncated copy and returned `0`. It also ignored the
