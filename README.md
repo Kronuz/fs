@@ -6,111 +6,119 @@ Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a colle
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
-The filesystem chores a database server needs, in C++20: create a directory chain,
-delete or quarantine files by glob, copy or move a directory's files, and normalize a path without
-touching the disk.
-
-![fs: helpers over io, strings, split, and stringified](assets/architecture.svg)
+POSIX filesystem helpers for C++20: mkdir -p, glob delete and quarantine, directory copy and move, path normalization.
+They are free functions over POSIX directory calls, with file I/O through
+[io](https://github.com/Kronuz/io) so a copy survives signals. Reach for them in
+server code that manages its own data directories.
 
 ## ✨ Highlights
 
-- 📁 **`mkdirs`**: the whole chain in one call.
-- 🧹 **`delete_files`** by glob, removing the directory when it ends up empty.
-- 🚧 **`quarantine_files`**: rename suspect files aside instead of deleting them.
-- 📋 **`copy_file` and `move_files`** for the files of a directory; a copy onto the
-  same file is refused, never truncating it.
-- ✂️ **`normalize_path`**: collapses `.`, `..`, and repeated `/` as a pure string
-  operation.
-- 🛡️ **EINTR-safe** through [io](https://github.com/Kronuz/io); logging is an optional
-  seam (`FS_TRACE_HEADER`).
-
-## 📦 Installation
-
-Requires a C++20 compiler, a POSIX system, and CMake 3.14 or newer. It brings
-[io](https://github.com/Kronuz/io), [strings](https://github.com/Kronuz/strings),
-[split](https://github.com/Kronuz/split), and
-[stringified](https://github.com/Kronuz/stringified). CI builds it on Linux (x86_64,
-arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan, UBSan, and TSan builds.
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(fs
-  GIT_REPOSITORY https://github.com/Kronuz/fs.git
-  GIT_TAG        main)
-FetchContent_MakeAvailable(fs)
-
-target_link_libraries(my_app PRIVATE fs::fs)
-```
+- **The whole chain.** `mkdirs("a/b/c")` creates every missing directory, like
+  `mkdir -p`.
+- **Glob delete that cleans up.** `delete_files` removes the regular files that
+  match any `fnmatch` pattern, then the directory once nothing is left in it.
+- **Recoverable delete.** `quarantine_files` moves matching files into a fresh
+  `.quarantine.XXXXXX` directory instead of deleting them.
+- **Careful copies.** `copy_file` reports a short write as `-1`, retries `EINTR`,
+  and refuses to copy a file onto itself (same device and inode) before it
+  truncates anything.
+- **Pure path normalization.** `normalize_path` collapses `.`, `..`, and
+  repeated `/` without touching the disk.
+- **Optional logging.** Diagnostics go through `FS_TRACE_HEADER`, a no-op unless
+  the host supplies one.
 
 ## 🚀 Quick start
 
 ```cpp
 #include "fs.hh"
 
-#include <cassert>
+#include <cstdio>
+#include <fstream>
 
 int main() {
-	mkdirs("data/shard/3");                          // the whole chain
-	assert(exists("data/shard/3"));
-	delete_files("data/shard/3", {"*.tmp", "*.lock"}); // and rmdir if it ends up empty
-	assert(normalize_path("a/b/../c") == "a/c");     // no disk access
+	mkdirs("demo/shard/3");  // the whole chain, like mkdir -p
+	std::ofstream("demo/shard/3/a.tmp") << "x";
+	std::ofstream("demo/shard/3/b.lock") << "x";
+	delete_files("demo/shard/3", {"*.tmp", "*.lock"});  // then rmdir, since it ends up empty
+	std::printf("%d\n", exists("demo/shard/3"));  // 0
+	std::printf("%d\n", exists("demo/shard"));  // 1
+	std::printf("%s\n", normalize_path("a/./b/../c//d").c_str());  // a/c/d, without touching the disk
 }
 ```
 
-## 🧰 API
+[`examples/db_layout.cc`](examples/db_layout.cc) builds a self-checking,
+Xapiand-style database directory layout.
 
-| Function | Does |
-| --- | --- |
-| `normalize_path(p, slashed, keep_slash)` | pure-string collapse of `.` / `..` / repeated `/` |
-| `exists(p)` / `mkdir(p)` / `mkdirs(p)` | stat / single dir / recursive dir chain |
-| `delete_files(p, patterns)` | `fnmatch`-delete matching files; `rmdir` the dir if it ends up empty |
-| `quarantine_files(p, patterns, suffix)` | rename matching files aside (into a `mkstemp` suffix) instead of deleting |
-| `move_files(src, dst)` / `copy_file(...)` | move / copy the regular files of a directory (subdirectories are not entered) |
-| `opendir(p, create)` / `find_file_dir(...)` | directory iteration helpers |
-| `build_path_index(p)` | create the index directory chain for a path |
+## 📦 Installation
 
-All functions are in the global namespace and take `std::string_view` paths. `mkdirs` and
-`build_path_index` return `false` for an empty path, as `mkdir -p ""` fails.
+Requires a C++20 compiler, a POSIX system, and CMake 3.16 or newer. It fetches
+[io](https://github.com/Kronuz/io), [strings](https://github.com/Kronuz/strings),
+[split](https://github.com/Kronuz/split), and
+[stringified](https://github.com/Kronuz/stringified), pinned by commit. CI builds
+it on Linux (x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan,
+UBSan, and TSan builds.
 
-`copy_file` returns `0` only when every byte of every copied file was written and the
-destination closed cleanly; a failed or short write (a full disk, `RLIMIT_FSIZE`, a quota
-reported at `close`) returns `-1` and logs the error, and leaves the partial destination
-file in place, as for any other failure. A signal (`EINTR`) is retried.
+```cmake
+include(FetchContent)
+FetchContent_Declare(fs
+  GIT_REPOSITORY https://github.com/Kronuz/fs.git
+  GIT_TAG        c4bf223d9ba08361c71a863c2e9a73bb50fdefcf)  # or main for the tip
+FetchContent_MakeAvailable(fs)
 
-`copy_file` refuses to copy a file onto itself: when the source and the destination are one
-file (the same device and inode, reached by the same path, another spelling of it, a
-symlink, a hard link or a case-insensitive name) it returns `-1`, as `cp` reports
-"identical (not copied)", and the file is left as it was. The check reads the identity from
-the open descriptors, before the destination is truncated. A directory copy stops at the
-first failure.
+target_link_libraries(my_app PRIVATE fs::fs)
+```
+
+```cpp
+#include "fs.hh"
+```
+
+`fs::fs` is a static library built from `fs.cc`.
 
 ## 🎯 When to use it
 
-- ✅ Server code that manages its own data directories on POSIX systems.
-- ❌ General-purpose path work: prefer `std::filesystem`, which covers most of this
-  portably.
+Use it in POSIX server code that lays out its own data directories: creating
+shard trees, clearing or quarantining files by pattern, and receiving files into
+a temporary directory before moving them into place.
+
+Not for:
+
+- **Portable path work.** `std::filesystem` covers most of this on every
+  platform.
+- **Recursive trees.** The directory helpers act on the regular files of one
+  directory and never enter subdirectories.
+- **Error details from bulk helpers.** `delete_files`, `quarantine_files`, and
+  `move_files` return nothing; a failure reaches only the logging seam.
+- **Filesystems that report `DT_UNKNOWN`.** Regular files are picked by the
+  `d_type` that `readdir` returns, so entries without one are skipped.
+- **Empty paths into `normalize_path`.** An empty path normalizes to `/`.
 
 ## 📚 Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md): how each helper works and fails.
-- [examples/db_layout.cc](examples/db_layout.cc): a self-checking, Xapiand-style
-  database layout.
+- [docs/API.md](docs/API.md): every function, its return value, and the
+  `normalize_path` flags.
+- [ARCHITECTURE.md](ARCHITECTURE.md): dependencies, the logging seam, and the
+  behaviors callers rely on.
+- [CHANGELOG.md](CHANGELOG.md): what changed.
 - [AGENTS.md](AGENTS.md): repository map and invariants.
-- [CHANGELOG.md](CHANGELOG.md): behavior changes, newest first.
+- [Catalog entry](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#fs)
+  in Kronuz C++ Libraries.
 
 ## 🛠️ Building and testing
 
 ```sh
-cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+cmake -B build
+cmake --build build
 ctest --test-dir build
 ```
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) first. CI must
-pass on every platform.
+Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) and the
+catalog's [rules of engagement](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#rules-of-engagement)
+first; CI must pass on every platform.
 
 ## 📄 License
 
-MIT, Copyright (c) 2015-2019 Dubalu LLC. See [LICENSE](LICENSE). Extracted from
+MIT, Copyright (c) 2026 Germán Méndez Bravo (Kronuz) and Copyright (c) 2015-2020
+Dubalu LLC. See [LICENSE](LICENSE). Extracted from
 [Xapiand](https://github.com/Kronuz/Xapiand).

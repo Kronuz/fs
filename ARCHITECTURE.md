@@ -4,29 +4,9 @@
 The value is in the recursion, glob matching, and path-string normalization; the raw
 byte I/O is delegated to the `io` library.
 
-![fs: filesystem helpers delegating byte I/O to io, path work to string libs](assets/architecture.svg)
-
-<!-- Diagram: assets/architecture.svg. Edit the D2 source below and re-render with:
-     d2 --theme 0 --pad 20 <this-source>.d2 assets/architecture.svg
-
-```d2
-# fs: filesystem helpers delegating byte I/O to io, path work to string libs.
-direction: down
-api: "fs API\n(mkdirs, delete_files, copy_file, normalize_path, ...)" { style.fill: "#e8f5ee" }
-deps: "dependencies" {
-  style.fill: "#eef2f7"
-  grid-columns: 4
-  io: "io\n(EINTR-safe file ops)"; split: "split\n(path by '/')"; strings: "strings\n(prefix/suffix)"; stringified: "stringified\n(NUL-terminate)"
-}
-seam: "FS_TRACE_HEADER\n(L_* logging + error:: / repr; no-op default)" { style.fill: "#faf3e6" }
-api -> deps.io; api -> deps.split; api -> deps.strings; api -> deps.stringified
-api -> seam: "diagnostics" { style.stroke-dash: 3 }
-```
--->
-
 ## Dependencies
 
-Kronuz libraries, fetched at tip: **`io`** (EINTR-safe `open`/`close`/`read`/`write`/
+Kronuz libraries, pinned by commit in `CMakeLists.txt`: **`io`** (EINTR-safe `open`/`close`/`read`/`write`/
 `mkdtemp`), **`split`** (`Split<>` to walk a path by `/`), **`strings`**
 (`startswith`/`endswith`), **`stringified`** (`string_view` → NUL-terminated). Logging
 is **not** a dependency: the `L_*` family is no-op by default and its `error::`/`repr`
@@ -62,8 +42,9 @@ host wires up the rest of the family.
 - **`delete_files` self-cleans.** After deleting every file matching the patterns, if
   the directory has no remaining files or subdirectories it is `rmdir`'d. Callers rely
   on this (a shard directory disappears once its files are gone).
-- **`quarantine_files`** renames matches aside into a `mkstemp`-suffixed name rather
-  than removing them -- a recoverable "delete".
+- **`quarantine_files`** renames matches into a fresh `mkdtemp` directory
+  (`<path>/.quarantine.XXXXXX` by default) rather than removing them, a recoverable
+  "delete".
 - **`normalize_path` is pure string manipulation**: it never touches the filesystem,
   so it works on non-existent / symlinked paths and is safe to call anywhere.
 
