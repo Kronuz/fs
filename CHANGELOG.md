@@ -21,9 +21,24 @@ All notable changes to `fs` are recorded here, newest first. The format follows
   random ones in all four flag combinations, and checks that a relative path never becomes
   absolute. `test_normalize_path_empty` states the one class that changed (old `"/"`, new
   `""`) and fails with the old `fs.cc`.
-- `README.md` lists as a limit that a first component is never popped by `..`
-  (`normalize_path("a/..")` is `"a"`, a leading `..` is `.`), which the function has always
-  done; it is not changed here.
+- `normalize_path` never popped the first component of a relative path, because the pop
+  loop stopped one byte above the start of the output to protect the root: `a/..` was `a`,
+  `a/../b` was `a/b`, and `a/b/../..` was `a`. A `..` now pops it like any
+  other component, and when nothing is left the path is `.` (`./` with `slashed` or a kept
+  trailing `/`). The root is not popped, a leading `.` or `..` stays the `.` the output
+  starts with (`../a` is still `./a`, `./a/..` is `.`), and a path with an empty result no
+  longer writes a `/` at the start of the output. Oracle: `std::filesystem::path`
+  `lexically_normal`, which gives `.` for `a/..` and `b` for `a/../b`, with the library's
+  trailing-slash policy applied; it is used where it and the library agree (names and exactly
+  `..`, no leading `..`, and with `keep_slash` no unterminated `..`). Everything else is
+  unchanged: `test_normalize_path_frozen` lists the changed class with a model of it, requires
+  the frozen loop's bytes outside it and the oracle's inside it, and checks that the frozen
+  loop was wrong on some of what the oracle reaches, over every string
+  of `a`, `.` and `/` up to length 8 and 30,000 random ones in all four flag combinations.
+  `test_normalize_path_first_component` states the cases. The same fix is in `storage`.
+  `url-parser` carries another copy of the loop, with the same bug.
+- With `keep_slash` the last component is left as written, so `a/..` stays `a/..`; the
+  README says so (it is not changed here).
 
 ### Tests
 

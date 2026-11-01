@@ -29,8 +29,8 @@ they are pulled in only when a host opts into real logging via `FS_TRACE_HEADER`
 
 - **Behavior from Xapiand.** The code comes from Xapiand's in-tree `fs.*`. Do not change
   the glob semantics, the `delete_files` empty-dir `rmdir`, or `normalize_path` output
-  (test/test.cc compares it with a frozen copy of the loop, and an empty path is the one
-  class that differs: it stays empty).
+  (test/test.cc compares it with a frozen copy of the loop; two classes differ: an empty
+  path stays empty, and a `..` pops the first component of a relative path).
 - **File I/O goes through `io::`**, never raw syscalls -- keep EINTR/short-count
   handling consistent.
 - **One seam only: `FS_TRACE_HEADER`.** `error::`/`repr`/`L_*` may appear only inside

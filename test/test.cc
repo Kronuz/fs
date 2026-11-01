@@ -112,35 +112,111 @@ static int in_child(F f) {
 	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-// normalize_path over every string of "a", "." and "/" up to length 8 and 30,000 random ones up to 24,
-// in all four flag combinations, equals the frozen implementation. The one class that differs from the
-// frozen loop is the empty path without keep_slash: the frozen loop appended its closing '/' to nothing
-// and returned "/", the root, for a path that names nothing. test_normalize_path_empty states that class.
+// The class of paths whose result changed: a relative path where a ".." (or a longer run of dots, which pops
+// one component fewer than it has dots) pops every component the output holds. The frozen loop never popped
+// the first component, so "a/.." was "a" and "a/../b" was "a/b"; the output is now empty at that point
+// ("." if nothing follows). Components are split at '/'; each one followed by '/' is resolved, and so is the
+// last one unless keep_slash leaves it as it is. A leading run of dots stays as the "." the output starts
+// with and is never popped.
+static bool is_dots(std::string_view c) { return !c.empty() && c.find_first_not_of('.') == std::string_view::npos; }
+
+static std::vector<std::string_view> split_components(std::string_view s) {
+	std::vector<std::string_view> out;
+	std::size_t at = 0;
+	for (;;) {
+		std::size_t slash = s.find('/', at);
+		if (slash == std::string_view::npos) { out.push_back(s.substr(at)); return out; }
+		out.push_back(s.substr(at, slash - at));
+		at = slash + 1;
+	}
+}
+
+static bool pops_first_component(std::string_view s, bool keep_slash) {
+	if (s.empty() || s[0] == '/') { return false; }
+	const auto comps = split_components(s);
+	const std::size_t resolved = comps.size() - (keep_slash ? 1 : 0);
+	std::size_t depth = 0;
+	bool base = false, out_empty = true, hit = false;
+	for (std::size_t i = 0; i < resolved; ++i) {
+		const std::string_view c = comps[i];
+		if (c.empty()) { continue; }
+		if (!is_dots(c)) { ++depth; out_empty = false; continue; }
+		if (out_empty) { base = true; out_empty = false; continue; }
+		const std::size_t pops = c.size() - 1;
+		if (pops == 0 || depth == 0) { continue; }
+		if (pops >= depth && !base) { hit = true; depth = 0; out_empty = true; }
+		else { depth = pops >= depth ? 0 : depth - pops; }
+	}
+	return hit;
+}
+
+// The oracle for the changed class where std::filesystem::path::lexically_normal and the library agree:
+// components that are names or exactly "..", a result with no leading "..", and with keep_slash a last
+// component that is not an unterminated "..". lexically_normal gives "." for what is left of "a/..", and
+// the library's own trailing-slash policy is applied to its answer.
+static bool oracle_applies(std::string_view s, bool keep_slash) {
+	const auto comps = split_components(s);
+	for (auto c : comps) {
+		if (is_dots(c) && c != "..") { return false; }
+	}
+	if (keep_slash && is_dots(comps.back())) { return false; }
+	const std::string ln = std::filesystem::path(std::string(s)).lexically_normal().generic_string();
+	return ln != ".." && ln.compare(0, 3, "../") != 0;
+}
+
+static std::string oracle_normalize(std::string_view s, bool slashed, bool keep_slash) {
+	std::string ln = std::filesystem::path(std::string(s)).lexically_normal().generic_string();
+	while (ln.size() > 1 && ln.back() == '/') { ln.pop_back(); }
+	return (keep_slash ? s.back() == '/' : slashed) ? ln + "/" : ln;
+}
+
+struct NormalizeCounts {
+	std::size_t compared = 0, changed = 0, applicable = 0, old_wrong = 0;
+	int reported = 0;
+};
+
+// One input, one flag combination: equal to the frozen loop outside the changed class; inside it, equal to
+// the oracle where the oracle applies (and the frozen loop was not); a relative path stays relative.
+static void compare_normalize(const std::string& s, bool slashed, bool keep_slash, NormalizeCounts& n) {
+	const std::string now = normalize_path(s, slashed, keep_slash);
+	const std::string old = frozen_normalize(s, slashed, keep_slash);
+	const bool changed = pops_first_component(s, keep_slash);
+	auto fail = [&](const char* what, const std::string& want) {
+		if (n.reported++ < 20) {
+			std::fprintf(stderr, "FAIL normalize_path(\"%s\", %d, %d) = \"%s\": %s \"%s\"\n", s.c_str(), slashed, keep_slash, now.c_str(), what, want.c_str());
+		}
+		++failures;
+	};
+	if (!changed) {
+		if (now != old) { fail("frozen gives", old); }
+	} else {
+		++n.changed;
+		if (oracle_applies(s, keep_slash)) {
+			const std::string want = oracle_normalize(s, slashed, keep_slash);
+			++n.applicable;
+			if (now != want) { fail("oracle gives", want); }
+			if (old != want) { ++n.old_wrong; }
+		}
+	}
+	if (s[0] != '/' && now.substr(0, 1) == "/") { fail("made a relative path absolute, from", s); }
+	++n.compared;
+}
+
+// normalize_path over every string of "a", "." and "/" up to length 8 and 30,000 random ones up to 24, in
+// all four flag combinations, equals the frozen implementation except in two classes: the empty path
+// without keep_slash (the frozen loop appended its closing '/' to nothing and returned the root;
+// test_normalize_path_empty states it) and the paths where a ".." pops the first component (above).
 // Beside the comparison, the result never starts with '/' unless the input does: relative stays relative.
 static void test_normalize_path_frozen() {
 	const char alphabet[] = {'a', '.', '/'};
-	std::size_t compared = 0;
+	NormalizeCounts n;
 	for (int length = 1; length <= 8; ++length) {
 		std::size_t total = 1;
 		for (int i = 0; i < length; ++i) { total *= 3; }
-		for (std::size_t n = 0; n < total; ++n) {
+		for (std::size_t k = 0; k < total; ++k) {
 			std::string s;
-			for (std::size_t m = n, i = 0; i < static_cast<std::size_t>(length); ++i, m /= 3) { s.push_back(alphabet[m % 3]); }
-			for (int flags = 0; flags < 4; ++flags) {
-				bool slashed = flags & 1, keep_slash = flags & 2;
-				if (normalize_path(s, slashed, keep_slash) != frozen_normalize(s, slashed, keep_slash)) {
-					std::fprintf(stderr, "FAIL normalize_path(\"%s\", %d, %d) = \"%s\", frozen \"%s\"\n", s.c_str(), slashed, keep_slash,
-						normalize_path(s, slashed, keep_slash).c_str(), frozen_normalize(s, slashed, keep_slash).c_str());
-					++failures;
-					return;
-				}
-				if (s[0] != '/' && normalize_path(s, slashed, keep_slash).substr(0, 1) == "/") {
-					std::fprintf(stderr, "FAIL normalize_path(\"%s\", %d, %d) made a relative path absolute\n", s.c_str(), slashed, keep_slash);
-					++failures;
-					return;
-				}
-				++compared;
-			}
+			for (std::size_t m = k, i = 0; i < static_cast<std::size_t>(length); ++i, m /= 3) { s.push_back(alphabet[m % 3]); }
+			for (int flags = 0; flags < 4; ++flags) { compare_normalize(s, flags & 1, flags & 2, n); }
 		}
 	}
 	std::uint64_t x = 0x9e3779b97f4a7c15ULL;
@@ -148,14 +224,40 @@ static void test_normalize_path_frozen() {
 		x ^= x << 13; x ^= x >> 7; x ^= x << 17;
 		std::string s;
 		for (std::uint64_t m = x, i = 0; i < 1 + x % 24; ++i, m = m * 6364136223846793005ULL + 1442695040888963407ULL) { s.push_back(alphabet[(m >> 33) % 3]); }
-		for (int flags = 0; flags < 4; ++flags) {
-			bool slashed = flags & 1, keep_slash = flags & 2;
-			CHECK(normalize_path(s, slashed, keep_slash) == frozen_normalize(s, slashed, keep_slash));
-			CHECK(s[0] == '/' || normalize_path(s, slashed, keep_slash).substr(0, 1) != "/");
-			++compared;
-		}
+		for (int flags = 0; flags < 4; ++flags) { compare_normalize(s, flags & 1, flags & 2, n); }
 	}
-	CHECK(compared > 100000);
+	std::printf("normalize_path: %zu compared, %zu in the changed class, %zu with an oracle, the frozen loop wrong on %zu\n", n.compared, n.changed, n.applicable, n.old_wrong);
+	CHECK(n.compared > 100000);
+	// The class is not empty, the oracle reaches into it, and the frozen loop was wrong on some of what it reaches.
+	CHECK(n.changed > 0);
+	CHECK(n.applicable > 0);
+	CHECK(n.old_wrong > 0);
+}
+
+// The first component of a relative path is popped by a ".." like any other: "a/.." is ".", "a/../b" is "b".
+static void test_normalize_path_first_component() {
+	CHECK(normalize_path("a/..") == ".");
+	CHECK(normalize_path("a/..", true) == "./");
+	CHECK(normalize_path("a/../") == ".");
+	CHECK(normalize_path("a/../", false, true) == "./");
+	CHECK(normalize_path("a/../b") == "b");
+	CHECK(normalize_path("a/../b/") == "b");
+	CHECK(normalize_path("a/../b/", true) == "b/");
+	CHECK(normalize_path("a/../b/", false, true) == "b/");
+	CHECK(normalize_path("a/b/../..") == ".");
+	CHECK(normalize_path("a/b/../../c") == "c");
+	CHECK(normalize_path("a/../b/..") == ".");
+	CHECK(normalize_path(".a/..") == ".");
+	CHECK(normalize_path("a./..") == ".");
+	CHECK(normalize_path("abc/../x/y") == "x/y");
+	// What is left alone: a deeper component, the root, a leading "." or "..", and a keep_slash tail.
+	CHECK(normalize_path("a/b/..") == "a");
+	CHECK(normalize_path("/a/..") == "/");
+	CHECK(normalize_path("/a/../b") == "/b");
+	CHECK(normalize_path("../a/..") == ".");
+	CHECK(normalize_path("../a") == "./a");
+	CHECK(normalize_path("./a/..") == ".");
+	CHECK(normalize_path("a/..", false, true) == "a/..");
 }
 
 // The empty path names nothing, so it normalizes to nothing in all four flag combinations (the same as
@@ -764,6 +866,7 @@ static void test_copy_file_faults() {
 int main() {
 	test_normalize_path();
 	test_normalize_path_frozen();
+	test_normalize_path_first_component();
 	test_normalize_path_null_view();
 	test_normalize_path_empty();
 	test_dir_roundtrip();

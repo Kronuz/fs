@@ -50,8 +50,13 @@ exist and does not resolve symlinks. By default it drops a trailing `/`;
 | `a/b/` | `a/b` | `a/b/` | `a/b/` |
 | `/x/../y/./z//` | `/y/z` | `/y/z/` | `/y/z/` |
 | `../a` | `./a` | `./a/` | `./a` |
+| `a/..` | `.` | `./` | `a/..` |
+| `a/../b/` | `b` | `b/` | `b/` |
 | (empty) | (empty) | (empty) | (empty) |
 
-A leading `..` becomes `.`. An empty path names nothing, so it stays empty in
-every combination (it is not the root, and `slashed` adds no `/` to it); a name
-appended to the result stays relative.
+A leading `..` becomes `.`. A `..` pops the component before it, the first
+component of a relative path included (`a/..` is `.`, `a/../b` is `b`), and
+never the root (`/a/..` is `/`). With `keep_slash` a component is resolved only
+when a `/` follows it, so the last one is left as written. An empty path names
+nothing, so it stays empty in every combination (it is not the root, and
+`slashed` adds no `/` to it); a name appended to the result stays relative.
