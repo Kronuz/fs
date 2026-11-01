@@ -7,38 +7,31 @@ All notable changes to `fs` are recorded here, newest first. The format follows
 
 ### Fixed
 
-- `normalize_path("")` returned `"/"` (with `keep_slash` off): the loop appended its closing
-  `/` to an empty path, which is the root. An empty path names nothing (`mkdirs("")` is
-  `false` for the same reason), so it stays empty in all four flag combinations, and a
-  default-constructed `std::string_view` gives the same. Oracle: `std::filesystem::path`
-  `lexically_normal`, which maps `""` to `""`; Python's `os.path.normpath` maps it to `"."`,
-  which no caller wants. The in-family callers agree: `storage` appends volume names to
-  `normalize_path(base, true)`, so `"/"` made `Storage("")` open `"/vol.0"` at the root of
-  the filesystem, and `url-parser` passes `keep_slash`, where the result was already `""`.
-  The README and the API table said `/`, and now say that an empty path stays empty. Every
-  non-empty input gives the bytes it gave before: `test_normalize_path_frozen` compares the
-  old loop with the new over every string of `a`, `.` and `/` up to length 8 and 30,000
-  random ones in all four flag combinations, and checks that a relative path never becomes
-  absolute. `test_normalize_path_empty` states the one class that changed (old `"/"`, new
-  `""`) and fails with the old `fs.cc`.
-- `normalize_path` never popped the first component of a relative path, because the pop
-  loop stopped one byte above the start of the output to protect the root: `a/..` was `a`,
-  `a/../b` was `a/b`, and `a/b/../..` was `a`. A `..` now pops it like any
-  other component, and when nothing is left the path is `.` (`./` with `slashed` or a kept
-  trailing `/`). The root is not popped, a leading `.` or `..` stays the `.` the output
-  starts with (`../a` is still `./a`, `./a/..` is `.`), and a path with an empty result no
-  longer writes a `/` at the start of the output. Oracle: `std::filesystem::path`
-  `lexically_normal`, which gives `.` for `a/..` and `b` for `a/../b`, with the library's
-  trailing-slash policy applied; it is used where it and the library agree (names and exactly
-  `..`, no leading `..`, and with `keep_slash` no unterminated `..`). Everything else is
-  unchanged: `test_normalize_path_frozen` lists the changed class with a model of it, requires
-  the frozen loop's bytes outside it and the oracle's inside it, and checks that the frozen
-  loop was wrong on some of what the oracle reaches, over every string
-  of `a`, `.` and `/` up to length 8 and 30,000 random ones in all four flag combinations.
-  `test_normalize_path_first_component` states the cases. The same fix is in `storage`.
-  `url-parser` carries another copy of the loop, with the same bug.
-- With `keep_slash` the last component is left as written, so `a/..` stays `a/..`; the
-  README says so (it is not changed here).
+- `normalize_path` returns the lexical normal form of Python's `os.path.normpath`, and the
+  current directory has one spelling, `.`. Before, the empty path was `"/"` (the closing `/`
+  appended to nothing, the root), `.` with `keep_slash` was `""`, and `x/..` was `x`: the pop
+  loop never removed the first component of a relative path (`a/../b` was `a/b`, `aaa/..` was
+  `a`). A normalizer that answers `""` for one spelling of the current directory and `.` for
+  another gives callers two paths to compare, and `""` is not a path that `open` or `stat`
+  accepts. `""`, `.`, `./`, `x/..`, `x/../`, `./x/..` are now `.` (`./` with `slashed`, and
+  with `keep_slash` for a spelling that ends in `/`). A `..` was also one dot short (`..` was
+  `.`, `../a` was `./a`), and `...` popped two components. Now a `..` removes the component
+  before it, the first included; a relative path keeps the `..` it cannot remove (`../x` stays
+  `../x`, `a/../..` is `..`); the root absorbs it (`/x/..` and `/..` are `/`); a leading `./`
+  is dropped (`./a` is `a`); a component of three or more dots is a name. `keep_slash` keeps
+  the input's trailing `/` and resolves every component, the last one included (`a/..` is
+  `.`, `a/../` is `./`). A run of leading `/` is one root (`//x` is `/x`; `os.path.normpath`
+  keeps two). A default-constructed `std::string_view` is the empty path. Oracle:
+  `os.path.normpath`, not `std::filesystem::path::lexically_normal`, which maps `""` to `""`
+  and `x/..` to `.`, the two spellings the ruling unifies. `test_normalize_path_table` is
+  `os.path.normpath`'s output for 55 inputs in three flag combinations;
+  `test_normalize_path_frozen` checks a stack-of-components model against the library over
+  every string of `a`, `b`, `.` and `/` up to length 8 and 30,000 random ones in all four flag
+  combinations, that a second normalization changes nothing, that the results over the 87,380
+  exhaustive strings hash to the digest of Python's own results, and that every non-empty
+  input without a `.` gives the bytes the old loop gave. With the old `fs.cc` the table, the
+  digest and the empty-path test fail. `storage` carries the same function. `url-parser`
+  carries a third copy of the old loop, which has the same bugs.
 
 ### Tests
 
@@ -65,7 +58,7 @@ All notable changes to `fs` are recorded here, newest first. The format follows
   data pointer) with `keep_slash`: the loop bound `end - 1` wrapped around, so
   the loop ran from the null pointer through the address space. The loop now
   counts the bytes of `[src, end)` and then the closing `/`, with no pointer
-  before the range, and a null view gives the result of `""`. The output for
+  before the range, and a null view gives the result of the empty path. The output for
   every non-empty input is unchanged (compared with a frozen copy of the old
   loop over every string of `a`, `.` and `/` up to length 8 and 30,000 random
   ones, in all four flag combinations).

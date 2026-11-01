@@ -46,8 +46,9 @@ host wires up the rest of the family.
   (`<path>/.quarantine.XXXXXX` by default) rather than removing them, a recoverable
   "delete".
 - **`normalize_path` is pure string manipulation**: it never touches the filesystem,
-  so it works on non-existent / symlinked paths and is safe to call anywhere. An empty
-  path stays empty (it names nothing; the root is not its normal form).
+  so it works on non-existent / symlinked paths and is safe to call anywhere. Its
+  result is `os.path.normpath`'s, with one spelling of the current directory (`.`,
+  also for the empty path): a usable path for `open` and `stat`, which `""` is not.
 
 ## Invariants
 

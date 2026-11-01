@@ -22,8 +22,9 @@ server code that manages its own data directories.
 - **Careful copies.** `copy_file` reports a short write as `-1`, retries `EINTR`,
   and refuses to copy a file onto itself (same device and inode) before it
   truncates anything.
-- **Pure path normalization.** `normalize_path` collapses `.`, `..`, and
-  repeated `/` without touching the disk.
+- **Pure path normalization.** `normalize_path` gives the lexical normal form
+  of `os.path.normpath`, one spelling for the current directory (`.`), without
+  touching the disk.
 - **Optional logging.** Diagnostics go through `FS_TRACE_HEADER`, a no-op unless
   the host supplies one.
 
@@ -90,9 +91,8 @@ Not for:
   `move_files` return nothing; a failure reaches only the logging seam.
 - **Filesystems that report `DT_UNKNOWN`.** Regular files are picked by the
   `d_type` that `readdir` returns, so entries without one are skipped.
-- **`keep_slash` on a trailing `.` or `..`.** With `keep_slash` the last component
-  is left as written (`a/..` stays `a/..`); a component is resolved only when a
-  `/` follows it.
+- **`//` as a distinct root.** A run of leading `/` is one root (`//x` is `/x`),
+  where POSIX lets `os.path.normpath` keep two.
 
 ## 📚 Documentation
 

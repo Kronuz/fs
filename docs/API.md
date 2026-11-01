@@ -42,21 +42,31 @@ destination is truncated.
 ## Path normalization
 
 `normalize_path` never touches the filesystem, so it works on paths that do not
-exist and does not resolve symlinks. By default it drops a trailing `/`;
-`slashed` adds one, and `keep_slash` leaves the input's trailing `/` as it is.
+exist and does not resolve symlinks. It returns the lexical normal form that
+Python's `os.path.normpath` returns, and the current directory has one spelling,
+`.`, a path that `open` and `stat` accept. By default it drops a trailing `/`;
+`slashed` adds one, and `keep_slash` keeps the input's trailing `/` (the
+input's, not the last component's: `a/..` is `.` and `a/../` is `./`).
 
 | input | `normalize_path(p)` | `slashed` | `keep_slash` |
 | --- | --- | --- | --- |
 | `a/b/` | `a/b` | `a/b/` | `a/b/` |
 | `/x/../y/./z//` | `/y/z` | `/y/z/` | `/y/z/` |
-| `../a` | `./a` | `./a/` | `./a` |
-| `a/..` | `.` | `./` | `a/..` |
+| `../a` | `../a` | `../a/` | `../a` |
+| `a/..` | `.` | `./` | `.` |
+| `a/../` | `.` | `./` | `./` |
 | `a/../b/` | `b` | `b/` | `b/` |
-| (empty) | (empty) | (empty) | (empty) |
+| `./a` | `a` | `a/` | `a` |
+| `/..` | `/` | `/` | `/` |
+| (empty) | `.` | `./` | `.` |
 
-A leading `..` becomes `.`. A `..` pops the component before it, the first
-component of a relative path included (`a/..` is `.`, `a/../b` is `b`), and
-never the root (`/a/..` is `/`). With `keep_slash` a component is resolved only
-when a `/` follows it, so the last one is left as written. An empty path names
-nothing, so it stays empty in every combination (it is not the root, and
-`slashed` adds no `/` to it); a name appended to the result stays relative.
+Empty and `.` components are dropped. A `..` removes the component before it,
+the first component of a relative path included (`a/../b` is `b`); a relative
+path keeps the `..` it cannot remove (`../x`, `a/../..` is `..`), and the root
+absorbs it (`/x/..` and `/..` are `/`). The current directory is `.` however it
+is spelled: `""`, `.`, `./`, `x/..`, `x/../`, `./x/..` (`./` with `slashed`). A
+component of three or more dots is a name. A run of leading `/` is one root
+(`//x` is `/x`; `os.path.normpath` keeps two). The result is at most two bytes
+longer than the input, and normalizing a result again changes nothing. A name
+appended to the `slashed` form is a path in that directory, `./vol.0` for the
+empty path.

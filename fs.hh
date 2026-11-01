@@ -62,6 +62,7 @@ void find_file_dir(DIR* dir, File_ptr& fptr, std::string_view pattern, bool pre_
 // the same path, a hard link, a symlink, a case-insensitive spelling). That file is not touched.
 int copy_file(std::string_view src, std::string_view dst, bool create = true, std::string_view file_name = "", std::string_view new_name = "");
 
-// Collapses ".", ".." and repeated "/" lexically (no filesystem access): drops a trailing "/", adds one
-// with `slashed`, keeps the input's with `keep_slash`. An empty path stays empty.
+// The lexical normal form of os.path.normpath (no filesystem access): drops "." and empty components,
+// resolves "..", keeps a leading ".." of a relative path, and spells the current directory "." however it
+// is written (also ""). Drops a trailing "/", adds one with `slashed`, keeps the input's with `keep_slash`.
 std::string normalize_path(std::string_view src, bool slashed = false, bool keep_slash = false);
