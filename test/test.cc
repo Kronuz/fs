@@ -12,6 +12,7 @@
 #include <cctype>
 #include <algorithm>
 #include <fcntl.h>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <sys/resource.h>
@@ -112,11 +113,10 @@ static int in_child(F f) {
 }
 
 // normalize_path over every string of "a", "." and "/" up to length 8 and 30,000 random ones up to 24,
-// in all four flag combinations, equals the frozen implementation. An empty input is the one place the
-// old loop is not usable as an oracle (it formed end - 1, which for a default-constructed view wrapped
-// around and walked off the buffer), so its four results are stated: no component, no slash to keep.
-// Oracle for those: the frozen implementation on a one-byte buffer holding "" (verified when this was
-// written), i.e. "/" with keep_slash off and "" with it on.
+// in all four flag combinations, equals the frozen implementation. The one class that differs from the
+// frozen loop is the empty path without keep_slash: the frozen loop appended its closing '/' to nothing
+// and returned "/", the root, for a path that names nothing. test_normalize_path_empty states that class.
+// Beside the comparison, the result never starts with '/' unless the input does: relative stays relative.
 static void test_normalize_path_frozen() {
 	const char alphabet[] = {'a', '.', '/'};
 	std::size_t compared = 0;
@@ -134,6 +134,11 @@ static void test_normalize_path_frozen() {
 					++failures;
 					return;
 				}
+				if (s[0] != '/' && normalize_path(s, slashed, keep_slash).substr(0, 1) == "/") {
+					std::fprintf(stderr, "FAIL normalize_path(\"%s\", %d, %d) made a relative path absolute\n", s.c_str(), slashed, keep_slash);
+					++failures;
+					return;
+				}
 				++compared;
 			}
 		}
@@ -146,19 +151,41 @@ static void test_normalize_path_frozen() {
 		for (int flags = 0; flags < 4; ++flags) {
 			bool slashed = flags & 1, keep_slash = flags & 2;
 			CHECK(normalize_path(s, slashed, keep_slash) == frozen_normalize(s, slashed, keep_slash));
+			CHECK(s[0] == '/' || normalize_path(s, slashed, keep_slash).substr(0, 1) != "/");
 			++compared;
 		}
 	}
 	CHECK(compared > 100000);
-
-	CHECK(normalize_path("", false, false) == "/");
-	CHECK(normalize_path("", true, false) == "/");
-	CHECK(normalize_path("", false, true) == "");
-	CHECK(normalize_path("", true, true) == "");
 }
 
-// A default-constructed std::string_view (null data pointer) is an empty path like "". normalize_path
-// used to crash on it with keep_slash (end - 1 wrapped around, the loop read from address 1).
+// The empty path names nothing, so it normalizes to nothing in all four flag combinations (the same as
+// mkdirs(""), which is false). Oracle: std::filesystem::path::lexically_normal, which maps "" to "";
+// os.path.normpath maps it to ".", which no caller wants (storage appends file names to the result
+// of normalize_path(base, true), so "." would need a second spelling and "/" would write into the root).
+// The frozen loop returned "/" for the two combinations without keep_slash: that class, and only
+// that class, differs, so old != new there and new == oracle; with keep_slash old == new == "".
+static void test_normalize_path_empty() {
+	const std::string oracle = std::filesystem::path("").lexically_normal().string();
+	CHECK(oracle.empty());
+	for (int flags = 0; flags < 4; ++flags) {
+		bool slashed = flags & 1, keep_slash = flags & 2;
+		CHECK(normalize_path("", slashed, keep_slash) == oracle);
+		CHECK(normalize_path(std::string_view(), slashed, keep_slash) == oracle);
+		if (!keep_slash) {
+			CHECK(frozen_normalize("", slashed, keep_slash) == "/");
+			CHECK(frozen_normalize("", slashed, keep_slash) != normalize_path("", slashed, keep_slash));
+		}
+	}
+	// What the empty path leaves behind is not the root: a name appended to it stays relative.
+	CHECK(normalize_path("", true) + "vol.0" == "vol.0");
+	// A path that is only separators or dots is not empty: it keeps its meaning.
+	CHECK(normalize_path("/") == "/");
+	CHECK(normalize_path(".") == ".");
+	CHECK(normalize_path("./", true) == "./");
+}
+
+// A default-constructed std::string_view (null data pointer) is an empty path like "": the loop forms
+// no pointer before the range, so it neither crashes nor reads outside the buffer.
 static void test_normalize_path_null_view() {
 	for (int flags = 0; flags < 4; ++flags) {
 		bool slashed = flags & 1, keep_slash = flags & 2;
@@ -738,6 +765,7 @@ int main() {
 	test_normalize_path();
 	test_normalize_path_frozen();
 	test_normalize_path_null_view();
+	test_normalize_path_empty();
 	test_dir_roundtrip();
 	test_empty_and_root_paths();
 	test_copy_file();

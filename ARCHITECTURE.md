@@ -46,7 +46,8 @@ host wires up the rest of the family.
   (`<path>/.quarantine.XXXXXX` by default) rather than removing them, a recoverable
   "delete".
 - **`normalize_path` is pure string manipulation**: it never touches the filesystem,
-  so it works on non-existent / symlinked paths and is safe to call anywhere.
+  so it works on non-existent / symlinked paths and is safe to call anywhere. An empty
+  path stays empty (it names nothing; the root is not its normal form).
 
 ## Invariants
 

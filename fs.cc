@@ -480,9 +480,9 @@ size_t normalize_path(const char* src, const char* end, char* dst, bool slashed,
 	char* ret = dst;
 	char ch = '\0';
 	// Visit every byte of [src, end), then the closing '/' of the last component unless keep_slash.
-	// There is no end - 1: for an empty or default-constructed view (a null src) it wrapped around and
-	// the loop ran past the buffer.
-	bool closing = !keep_slash && src <= end;
+	// An empty path has no last component, so it gets no closing '/' (that would name the root).
+	// There is no end - 1, so a default-constructed view (a null src) is the empty path.
+	bool closing = !keep_slash && src < end;
 	while (src < end || closing) {
 		if (src < end) {
 			ch = *src++;

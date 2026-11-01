@@ -90,7 +90,9 @@ Not for:
   `move_files` return nothing; a failure reaches only the logging seam.
 - **Filesystems that report `DT_UNKNOWN`.** Regular files are picked by the
   `d_type` that `readdir` returns, so entries without one are skipped.
-- **Empty paths into `normalize_path`.** An empty path normalizes to `/`.
+- **Resolving `..` against a first component.** A leading `..` becomes `.`, and
+  a first component is never popped (`a/..` is `a`); the function keeps relative
+  paths relative and does not compute where they lead.
 
 ## 📚 Documentation
 

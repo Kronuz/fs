@@ -5,6 +5,26 @@ All notable changes to `fs` are recorded here, newest first. The format follows
 
 ## 2026-11-01
 
+### Fixed
+
+- `normalize_path("")` returned `"/"` (with `keep_slash` off): the loop appended its closing
+  `/` to an empty path, which is the root. An empty path names nothing (`mkdirs("")` is
+  `false` for the same reason), so it stays empty in all four flag combinations, and a
+  default-constructed `std::string_view` gives the same. Oracle: `std::filesystem::path`
+  `lexically_normal`, which maps `""` to `""`; Python's `os.path.normpath` maps it to `"."`,
+  which no caller wants. The in-family callers agree: `storage` appends volume names to
+  `normalize_path(base, true)`, so `"/"` made `Storage("")` open `"/vol.0"` at the root of
+  the filesystem, and `url-parser` passes `keep_slash`, where the result was already `""`.
+  The README and the API table said `/`, and now say that an empty path stays empty. Every
+  non-empty input gives the bytes it gave before: `test_normalize_path_frozen` compares the
+  old loop with the new over every string of `a`, `.` and `/` up to length 8 and 30,000
+  random ones in all four flag combinations, and checks that a relative path never becomes
+  absolute. `test_normalize_path_empty` states the one class that changed (old `"/"`, new
+  `""`) and fails with the old `fs.cc`.
+- `README.md` lists as a limit that a first component is never popped by `..`
+  (`normalize_path("a/..")` is `"a"`, a leading `..` is `.`), which the function has always
+  done; it is not changed here.
+
 ### Tests
 
 - `copy_file`'s same-file check is a file-local predicate, `same_file`, that
