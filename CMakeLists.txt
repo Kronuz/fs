@@ -46,6 +46,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 	target_link_libraries(fs_test PRIVATE fs Threads::Threads)
 	add_test(NAME fs COMMAND fs_test)
 
+	# The file identity copy_file refuses on (device and inode), checked on hand-made stat
+	# results: it includes fs.cc for the file-local predicate, so it links the dependencies
+	# and not the fs library.
+	add_executable(fs_identity_test test/identity_test.cc)
+	target_include_directories(fs_identity_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+	target_compile_features(fs_identity_test PRIVATE cxx_std_20)
+	target_link_libraries(fs_identity_test PRIVATE io::io strings::strings split stringified::stringified)
+	add_test(NAME fs_identity COMMAND fs_identity_test)
+
 	# A realistic usage example that mirrors Xapiand's database directory layout:
 	# normalize a data path, create the .xapiand tree, receive files into a
 	# mkdtemp switch dir, move them into place, quarantine WAL files, and delete

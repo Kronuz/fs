@@ -14,7 +14,8 @@ unit (`fs.cc`) plus a header (`fs.hh`). Read `ARCHITECTURE.md` first.
 fs.hh         The API (free functions, global namespace).
 fs.cc         The implementations -- the only compiled unit, where logging is emitted.
 fs_trace.h    No-op L_* logging defaults (redirect via FS_TRACE_HEADER).
-test/test.cc  ctest: normalize_path cases + a real mkdirs/delete/exists round-trip.
+test/test.cc  ctest: normalize_path cases + a real mkdirs/delete/exists round-trip, copy_file same-file, cross-filesystem and fault cases.
+test/identity_test.cc  ctest: the (device, inode) identity copy_file refuses on, on hand-made stat results (includes fs.cc).
 ```
 
 ## Dependencies (Kronuz family, via FetchContent at tip)

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cctype>
+#include <algorithm>
 #include <fcntl.h>
 #include <string>
 #include <string_view>
@@ -19,6 +20,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 #include "io.hh"
 
@@ -530,6 +532,116 @@ static void test_move_files_same_file() {
 }
 
 
+// copy_file between directories on different devices. Oracle: cp(1). A plain copy works in both
+// directions, over an existing file and as a directory copy, and a symlink on the other device
+// that points at the source is still the source. The directories come from where a host usually
+// keeps separate filesystems (the working directory, /tmp, /var/tmp, /dev/shm, $TMPDIR); with
+// fewer than two devices the test says so and skips. Two files on different devices may carry
+// the same inode number: the copy must not take that for one file (identity_test.cc builds that
+// case by hand, and here it happens on real files whenever the host's filesystems collide).
+static void test_copy_file_across_filesystems() {
+	struct Scratch { std::string dir; dev_t dev; };
+	std::vector<Scratch> scratch;
+	std::vector<std::string> candidates{".", "/tmp", "/var/tmp", "/dev/shm"};
+	if (const char* tmpdir = std::getenv("TMPDIR")) {
+		candidates.push_back(tmpdir);
+	}
+	for (const auto& candidate : candidates) {
+		std::string tmpl = candidate + "/fs_cross.XXXXXX";
+		char* made = ::mkdtemp(tmpl.data());
+		if (made == nullptr) {
+			continue;
+		}
+		struct stat st;
+		bool fresh = ::stat(made, &st) == 0 &&
+			std::none_of(scratch.begin(), scratch.end(), [&](const Scratch& s) { return s.dev == st.st_dev; });
+		if (fresh) {
+			scratch.push_back({made, st.st_dev});
+		} else {
+			::rmdir(made);
+		}
+	}
+
+	std::string payload(5000, 'x');
+	for (std::size_t i = 0; i < payload.size(); ++i) { payload[i] = static_cast<char>('a' + i % 26); }
+	const std::string other = "an existing destination that is longer than a short source";
+	const std::string big(9000, 'h');
+
+	if (scratch.size() < 2) {
+		std::puts("fs: cross-filesystem copy skipped (one filesystem)");
+	}
+	for (const auto& from : scratch) {
+		for (const auto& to : scratch) {
+			if (&from == &to) {
+				continue;
+			}
+			std::string x = from.dir + "/cd";
+			std::string y = to.dir + "/cd";
+			CHECK(mkdirs(x) && mkdirs(y));
+
+			struct stat sx, sy;
+			spit(x + "/f", payload);
+			spit(y + "/f", other);
+			CHECK(::stat((x + "/f").c_str(), &sx) == 0 && ::stat((y + "/f").c_str(), &sy) == 0);
+			if (sx.st_ino == sy.st_ino) {
+				std::printf("fs: %s and %s hand out the same inode number %llu on different devices\n",
+					x.c_str(), y.c_str(), static_cast<unsigned long long>(sx.st_ino));
+			}
+
+			int fd_before = next_fd();
+			int rc = copy_file(x, y, false, "f");
+			if (rc != 0 || slurp(y + "/f") != payload || slurp(x + "/f") != payload || next_fd() != fd_before) {
+				std::fprintf(stderr, "FAIL copy over an existing file %s -> %s: rc=%d\n", x.c_str(), y.c_str(), rc);
+				++failures;
+			}
+
+			// The other way round.
+			spit(y + "/f", other);
+			spit(x + "/f", payload);
+			rc = copy_file(y, x, false, "f");
+			if (rc != 0 || slurp(x + "/f") != other || slurp(y + "/f") != other) {
+				std::fprintf(stderr, "FAIL copy back %s -> %s: rc=%d\n", y.c_str(), x.c_str(), rc);
+				++failures;
+			}
+
+			// A symlink on the other device to the source: one file, so refused, source intact.
+			spit(x + "/f", payload);
+			::unlink((y + "/f").c_str());
+			std::string absolute = x;
+			if (absolute[0] != '/') { absolute = working_directory() + "/" + x; }
+			CHECK(::symlink((absolute + "/f").c_str(), (y + "/f").c_str()) == 0);
+			rc = copy_file(x, y, false, "f");
+			if (rc != -1 || slurp(x + "/f") != payload) {
+				std::fprintf(stderr, "FAIL symlink on another device to the source %s: rc=%d, %zu bytes left\n",
+					y.c_str(), rc, slurp(x + "/f").size());
+				++failures;
+				spit(x + "/f", payload);
+			}
+			::unlink((y + "/f").c_str());
+
+			// A directory copy of several files.
+			spit(x + "/g", "g");
+			spit(x + "/h", big);
+			rc = copy_file(x, y, false, "", "");
+			if (rc != 0 || slurp(y + "/f") != payload || slurp(y + "/g") != "g" || slurp(y + "/h") != big) {
+				std::fprintf(stderr, "FAIL directory copy %s -> %s: rc=%d\n", x.c_str(), y.c_str(), rc);
+				++failures;
+			}
+
+			for (const char* name : {"f", "g", "h"}) {
+				::unlink((x + "/" + name).c_str());
+				::unlink((y + "/" + name).c_str());
+			}
+			::rmdir(x.c_str());
+			::rmdir(y.c_str());
+		}
+	}
+	for (const auto& s : scratch) {
+		::rmdir(s.dir.c_str());
+	}
+}
+
+
 // copy_file under injected write failures. Oracle: a copy that did not write every byte of
 // the source is a failure (-1); one that wrote them all is 0 and byte-identical.
 static void test_copy_file_faults() {
@@ -632,6 +744,7 @@ int main() {
 	test_null_view_paths();
 	test_copy_file_same_file();
 	test_move_files_same_file();
+	test_copy_file_across_filesystems();
 	test_copy_file_faults();
 
 	if (failures != 0) {

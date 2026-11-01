@@ -3,6 +3,25 @@
 All notable changes to `fs` are recorded here, newest first. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2026-11-01
+
+### Tests
+
+- `copy_file`'s same-file check is a file-local predicate, `same_file`, that
+  compares the device and the inode number. `test/identity_test.cc` includes
+  `fs.cc` and checks it on hand-made `stat` results, because the real
+  filesystems of a build host rarely hand out one inode number on two devices.
+  A comparison on the inode alone, which refuses an unrelated file on another
+  device that carries the same number, survived `test/test.cc` on macOS and
+  Linux; it fails `fs_identity`.
+- `test_copy_file_across_filesystems` (`test/test.cc`) copies between
+  directories on different devices (the working directory, `/tmp`,
+  `/var/tmp`, `/dev/shm`, `$TMPDIR`): over an existing file, back again, as a
+  directory copy, and with a symlink on the other device that points at the
+  source (refused, source intact). It reports when two files on different
+  devices carry the same inode number, and skips when the host has one
+  filesystem.
+
 ## 2026-10-31
 
 ### Fixed

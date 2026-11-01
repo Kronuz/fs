@@ -60,6 +60,13 @@
 // #define L_FS L_WHITE
 
 
+// Whether two stat results name one file: the same inode on the same device. An inode number
+// alone is not an identity, because separate filesystems hand out the same numbers.
+static bool same_file(const struct stat& a, const struct stat& b) noexcept {
+	return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+}
+
+
 void delete_files(std::string_view path, const std::vector<std::string>& patterns) {
 	L_CALL("delete_files({}, <patterns>)", repr(path));
 
@@ -394,7 +401,7 @@ int copy_file(std::string_view src, std::string_view dst, bool create, std::stri
 				io::close(dst_fd);
 				return -1;
 			}
-			if (src_st.st_dev == dst_st.st_dev && src_st.st_ino == dst_st.st_ino) {
+			if (same_file(src_st, dst_st)) {
 				L_ERR("ERROR: {} and {} are the same file (not copied)\n", src_path, dst_path);
 				io::close(src_fd);
 				io::close(dst_fd);
