@@ -5,10 +5,12 @@
 #include "fs.hh"
 
 #include <cerrno>
+#include <climits>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <cctype>
 #include <algorithm>
 #include <fcntl.h>
@@ -356,6 +358,62 @@ static void test_dir_roundtrip() {
 	::rmdir((base + "/x/y").c_str());
 	::rmdir((base + "/x").c_str());
 	::rmdir(base.c_str());
+	CHECK(!exists(base));
+}
+
+
+// quarantine_files moves the matching files into a fresh directory next to them and leaves the rest.
+// With a path longer than PATH_MAX the template must stay a whole string: it used to be copied into a
+// PATH_MAX array with strncpy, which leaves it unterminated, and the log call and build_path_index then
+// read past the array (a stack-buffer-overflow under AddressSanitizer).
+// Leaves nonzero bytes in the stack the next call reuses, so an unterminated local array is read past its end.
+__attribute__((noinline)) static void dirty_stack() {
+	volatile char junk[16384];
+	for (size_t i = 0; i < sizeof junk; ++i) {
+		junk[i] = 'J';
+	}
+}
+
+static void test_quarantine_files() {
+	char tmpl[] = "fs_test.XXXXXX";
+	char* d = ::mkdtemp(tmpl);
+	CHECK(d != nullptr);
+	if (d == nullptr) {
+		return;
+	}
+	std::string base = d;
+
+	std::string dir = base + "/db";
+	CHECK(mkdirs(dir));
+	for (const char* name : {"wal.0", "wal.1", "keep.sx"}) {
+		int fd = io::open((dir + "/" + name).c_str(), O_WRONLY | O_CREAT, 0644);
+		CHECK(fd != -1);
+		if (fd != -1) {
+			io::close(fd);
+		}
+	}
+	quarantine_files(dir, {"wal.*"});
+	CHECK(exists(dir + "/keep.sx"));
+	CHECK(!exists(dir + "/wal.0"));
+	CHECK(!exists(dir + "/wal.1"));
+	size_t quarantined = 0;
+	for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+		if (entry.is_directory()) {
+			quarantined += exists(entry.path().string() + "/wal.0") && exists(entry.path().string() + "/wal.1");
+		}
+	}
+	CHECK(quarantined == 1);
+
+	std::string deep = base;
+	while (deep.size() < 2 * PATH_MAX) {
+		deep += "/" + std::string(30, 'a');
+	}
+	dirty_stack();
+	quarantine_files(deep, {"*"});
+	dirty_stack();
+	quarantine_files(deep, {"*"}, std::string(2 * PATH_MAX, 'b'));
+
+	std::filesystem::remove_all(base);
 	CHECK(!exists(base));
 }
 
@@ -885,6 +943,7 @@ int main() {
 	test_normalize_path_null_view();
 	test_normalize_path_empty();
 	test_dir_roundtrip();
+	test_quarantine_files();
 	test_empty_and_root_paths();
 	test_copy_file();
 	test_null_view_paths();

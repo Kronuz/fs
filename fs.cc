@@ -134,14 +134,14 @@ void delete_files(std::string_view path, const std::vector<std::string>& pattern
 void quarantine_files(std::string_view path, const std::vector<std::string>& patterns, std::string_view template_suffix) {
 	L_CALL("quarantine_files({}, <patterns>)", repr(path));
 
-	char quarantine_path[PATH_MAX + 1];
-
 	std::string path_string(path);
-	std::string template_suffix_string(template_suffix);
+	// A string, not a PATH_MAX array: a path of any length stays terminated.
+	std::string quarantine_path(path_string);
+	quarantine_path.push_back('/');
+	quarantine_path.append(template_suffix);
 
-	strncpy(quarantine_path, (path_string + "/" + template_suffix_string).c_str(), PATH_MAX);
 	build_path_index(quarantine_path);
-	if (io::mkdtemp(quarantine_path) == nullptr) {
+	if (io::mkdtemp(quarantine_path.data()) == nullptr) {
 		L_ERR("Directory {} not created: {} ({}): {}", quarantine_path, error::name(errno), errno, error::description(errno));
 		return;
 	}
