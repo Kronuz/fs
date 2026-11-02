@@ -5,6 +5,63 @@ All notable changes to `fs` are recorded here, newest first. The format follows
 
 ## 2026-11-01
 
+### Changed
+
+- `normalize_path` runs in one pass and is faster than at the campaign's start (ce16118) on 12 of the 14
+  comparable rows of the bench on the M4 (one ties, `np_relative` is 0.92x) and on all 14 on the i9,
+  after the three correctness rewrites (`bf10f39`, `7a10a04`, `d172a13`) had made it 0.69x to 0.84x of
+  START on the M4 and 0.45x to 0.88x on the i9 (the gate; 1116 ns against 502 ns for a 40-name path on the
+  i9). Each name is copied to the output as it is read and kept or dropped at its `/` (no second walk over
+  the name, one test for a name that is not plain, and a `..` that pops no longer scans back over a `..`
+  prefix: `floor` marks its end), and the
+  string overload builds a path of up to 510 bytes on the stack and copies it once into a string of its
+  size, where it was resized to `size + 2` (a zero fill) and shrunk, which with libstdc++ allocated for any
+  path of 14 bytes or more. The bytes are the same as the loop of 8934dbc on every input:
+  `test/normalize_test.cc` (CTest `fs_normalize`) compares them in all four flag combinations over every
+  string of `/`, `.`, `a`, `b` up to length 10 and of `/`, `.`, `a` up to length 12, 800,000 random strings
+  of names (1 to 40 bytes, dots, runs of slashes) and of bytes (NUL, 0x2d to 0x30, 0x80 to 0xff), and every
+  path length from 0 to 600 through the string overload, on exact-size heap blocks, so an AddressSanitizer
+  build fails on a byte read past the input or written past the `(end - src) + 2` bytes the contract gives
+  (12 million comparisons; ASan, UBSan and TSan green). Ten mutants of the new code (the pop floor is the
+  base, the dot test's mask is `0xFF`, no separator, a popped name leaves its `/`, no floor after a kept
+  `..`, a `.` kept, the root keeps a `..`, a stack buffer two bytes short, no closing `/`, an empty path is
+  not `.`) are each caught by it. `bench/normalize_path_bench.cc` (`-DFS_BUILD_BENCH=ON`) builds the
+  library's loop, the loop of 8934dbc and the one of ce16118, each with its string wrapper. ns per call, on
+  the M4 Pro (arm64; START and now from a hold of 3 paired runs with A/A, 8934dbc from an earlier one of 5
+  of the same code) and the i9 (x86-64, 5 paired runs):
+
+  | row | M4 START | M4 8934dbc | M4 now | M4 START/now | i9 START | i9 8934dbc | i9 now | i9 START/now |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | np_plain | 9.30 | 11.6 | 8.30 | 1.12x | 29.9 | 30.0 | 19.7 | 1.52x |
+  | np_relative | 8.50 | 11.0 | 9.10 | 0.92x | 27.2 | 29.1 | 20.4 | 1.33x |
+  | np_dots | 22.8 | 20.2 | 14.3 | 1.58x | 57.0 | 46.5 | 34.4 | 1.66x |
+  | np_trailing_slash | 13.4 | 14.7 | 12.3 | 1.10x | 38.6 | 32.8 | 21.6 | 1.78x |
+  | np_slashed | 13.4 | 14.5 | 11.9 | 1.13x | 37.4 | 32.5 | 21.0 | 1.77x |
+  | np_repeated_slashes | 16.0 | 17.2 | 13.2 | 1.21x | 45.9 | 37.4 | 24.0 | 1.94x |
+  | np_keep_slash | 12.3 | 14.9 | 12.3 | 1.01x | 34.5 | 32.9 | 20.9 | 1.65x |
+  | np_xapiand_path | 45.4 | 52.1 | 36.4 | 1.22x | 125.7 | 108.9 | 79.5 | 1.58x |
+  | np_long | 292.8 | 352.1 | 200.4 | 1.46x | 725.0 | 575.9 | 396.0 | 1.83x |
+  | np_long_dots | 262.2 | 251.0 | 159.4 | 1.65x | 713.5 | 598.4 | 373.2 | 1.91x |
+  | np_dot | 5.70 | 5.50 | 4.40 | 1.30x | 17.3 | 13.9 | 12.0 | 1.44x |
+  | np_root | 5.40 | 5.20 | 4.10 | 1.29x | 16.6 | 13.0 | 10.9 | 1.54x |
+  | np_abs_dotdot_end | 12.2 | 11.8 | 9.00 | 1.33x | 36.4 | 30.3 | 22.1 | 1.64x |
+  | np_abs_dotdot_root | 13.7 | 13.0 | 9.60 | 1.43x | 40.0 | 29.6 | 22.3 | 1.79x |
+
+  Geomean of START/now: 1.25 on the M4, 1.66 on the i9. Against 8934dbc every row is faster on both
+  (1.21x to 1.76x on the M4, 1.17x to 1.62x on the i9). `np_relative` (`a/b/c/d`, four one-byte names) is
+  0.92x of START on the M4 in this bench (0.6 ns of 9) and `np_keep_slash` ties; the gate's micro-bench
+  (each result folded into an FNV-1a in the timed loop) has them at 1.05x and 1.06x of START on the M4 and
+  every row at or above START on both machines (M4 geomean 1.39, i9 1.45). The leading-`./` and `../` rows
+  and the three rows whose result differs from START's by design (an empty path, a `..` that pops the
+  first component) are listed apart in the bench. What was tried for `np_relative` (a first byte copied
+  without a test, a loop that carries each name's closing `/`, the result written into the string instead
+  of the stack buffer: none moved it more than the layout noise, and the first made a 40-name path 1.5x
+  slower on the i9) and the next step are in issue #1.
+- `tools/normpath_oracle.py` regenerates the expected values of `test/test.cc`: the digest
+  `0xef8fe9971d37494b` over the 87,380 strings (the script that produced it was lost) and the 55-row table,
+  from `posixpath.normpath` with one root for a run of leading `/` and the flags' trailing `/` policy.
+  `--check test/test.cc` (CTest `fs_normpath_oracle`, when `python3` is found) fails when either differs.
+
 ### Fixed
 
 - `normalize_path` returns the lexical normal form of Python's `os.path.normpath`, and the
