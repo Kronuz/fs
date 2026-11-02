@@ -29,9 +29,9 @@ endif()
 #   split       -> Split<>                            (split.h)
 #   stringified -> stringified                        (stringified.hh)
 FetchContent_Declare(io          GIT_REPOSITORY https://github.com/Kronuz/io.git          GIT_TAG 93ddcaf3953e9e2abd0ea0615313fa1accb57c16)
-FetchContent_Declare(strings     GIT_REPOSITORY https://github.com/Kronuz/strings.git     GIT_TAG 09d4d1bfbd7dd475cc4c532338fd19beca19dcbe)
+FetchContent_Declare(strings     GIT_REPOSITORY https://github.com/Kronuz/strings.git     GIT_TAG 4f7fd80cb449a0de1d231a44f262ec22a9b15a35)
 FetchContent_Declare(split       GIT_REPOSITORY https://github.com/Kronuz/split.git       GIT_TAG 4b3010cb7b01958c045d9a738a5087887215e099)
-FetchContent_Declare(stringified GIT_REPOSITORY https://github.com/Kronuz/stringified.git GIT_TAG dea1ceba684e7fc35b54fa389579e8147ca62051)
+FetchContent_Declare(stringified GIT_REPOSITORY https://github.com/Kronuz/stringified.git GIT_TAG 47a0bb6fef17f17ce5d5ca563f4cbf020dff29bc)
 FetchContent_MakeAvailable(io strings split stringified)
 
 # --- Library target ---
