@@ -31,7 +31,7 @@ endif()
 FetchContent_Declare(io          GIT_REPOSITORY https://github.com/Kronuz/io.git          GIT_TAG 89d6b0f4d5ed06fcbc597fdcfe17befd055ca9bd)
 FetchContent_Declare(strings     GIT_REPOSITORY https://github.com/Kronuz/strings.git     GIT_TAG 1be38483a333d13544fbf6b0937409295c8ea3e0)
 FetchContent_Declare(split       GIT_REPOSITORY https://github.com/Kronuz/split.git       GIT_TAG 40af1a2089df42a3a622e6c3cd539b1e0f0da73f)
-FetchContent_Declare(stringified GIT_REPOSITORY https://github.com/Kronuz/stringified.git GIT_TAG 07c9505ece8824a80777bc9b49ed12a2002c9c9b)
+FetchContent_Declare(stringified GIT_REPOSITORY https://github.com/Kronuz/stringified.git GIT_TAG 05f91deaf86cddf33839d5a4de60ffb3ce73bed0)
 FetchContent_MakeAvailable(io strings split stringified)
 
 # --- Library target ---
