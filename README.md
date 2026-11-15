@@ -96,6 +96,8 @@ Not for:
 
 ## 📚 Documentation
 
+- [The Bag of Holding](https://kronuz.github.io/blog/bag-of-holding/):
+  the Familiars post that covers `fs` among the small helpers.
 - [docs/API.md](docs/API.md): every function, its return value, and the
   `normalize_path` flags.
 - [ARCHITECTURE.md](ARCHITECTURE.md): dependencies, the logging seam, and the
